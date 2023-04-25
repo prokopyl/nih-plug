@@ -23,7 +23,7 @@ use crate::wrapper::util::strlcpy;
 /// See the VST3 `WrapperInitContext` for an explanation of why we need this `pending_requests`
 /// field.
 pub(crate) struct WrapperInitContext<'a, P: ClapPlugin> {
-    pub(super) wrapper: &'a Wrapper<P>,
+    pub(super) wrapper: &'a Wrapper<'a, P>,
     pub(super) pending_requests: PendingInitContextRequests,
 }
 
@@ -39,7 +39,7 @@ pub(crate) struct PendingInitContextRequests {
 /// to lock guards for event queues. Otherwise reading these events would require constant
 /// unnecessary atomic operations to lock the uncontested RwLocks.
 pub(crate) struct WrapperProcessContext<'a, P: ClapPlugin> {
-    pub(super) wrapper: &'a Wrapper<P>,
+    pub(super) wrapper: &'a Wrapper<'a, P>,
     pub(super) input_events_guard: AtomicRefMut<'a, VecDeque<PluginNoteEvent<P>>>,
     pub(super) output_events_guard: AtomicRefMut<'a, VecDeque<PluginNoteEvent<P>>>,
     pub(super) transport: Transport,
@@ -48,6 +48,7 @@ pub(crate) struct WrapperProcessContext<'a, P: ClapPlugin> {
 /// A [`GuiContext`] implementation for the wrapper. This is passed to the plugin in
 /// [`Editor::spawn()`][crate::prelude::Editor::spawn()] so it can interact with the rest of the plugin and
 /// with the host for things like setting parameters.
+// TODO: do not take the whole wrapper here, this causes lifetime issues
 pub(crate) struct WrapperGuiContext<P: ClapPlugin> {
     pub(super) wrapper: Arc<Wrapper<P>>,
     #[cfg(debug_assertions)]
@@ -129,7 +130,7 @@ impl<P: ClapPlugin> ProcessContext<P> for WrapperProcessContext<'_, P> {
     }
 }
 
-impl<P: ClapPlugin> GuiContext for WrapperGuiContext<P> {
+impl<P: ClapPlugin> GuiContext for WrapperGuiContext<'static, P> {
     fn plugin_api(&self) -> PluginApi {
         PluginApi::Clap
     }

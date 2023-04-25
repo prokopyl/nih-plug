@@ -1,86 +1,71 @@
 use atomic_float::AtomicF32;
 use atomic_refcell::{AtomicRefCell, AtomicRefMut};
-use clap_sys::events::{
-    clap_event_header, clap_event_midi, clap_event_midi_sysex, clap_event_note,
-    clap_event_note_expression, clap_event_param_gesture, clap_event_param_mod,
-    clap_event_param_value, clap_event_transport, clap_input_events, clap_output_events,
-    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_IS_LIVE, CLAP_EVENT_MIDI, CLAP_EVENT_MIDI_SYSEX,
-    CLAP_EVENT_NOTE_CHOKE, CLAP_EVENT_NOTE_END, CLAP_EVENT_NOTE_EXPRESSION, CLAP_EVENT_NOTE_OFF,
-    CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_GESTURE_BEGIN, CLAP_EVENT_PARAM_GESTURE_END,
-    CLAP_EVENT_PARAM_MOD, CLAP_EVENT_PARAM_VALUE, CLAP_EVENT_TRANSPORT,
-    CLAP_NOTE_EXPRESSION_BRIGHTNESS, CLAP_NOTE_EXPRESSION_EXPRESSION, CLAP_NOTE_EXPRESSION_PAN,
-    CLAP_NOTE_EXPRESSION_PRESSURE, CLAP_NOTE_EXPRESSION_TUNING, CLAP_NOTE_EXPRESSION_VIBRATO,
-    CLAP_NOTE_EXPRESSION_VOLUME, CLAP_TRANSPORT_HAS_BEATS_TIMELINE,
-    CLAP_TRANSPORT_HAS_SECONDS_TIMELINE, CLAP_TRANSPORT_HAS_TEMPO,
-    CLAP_TRANSPORT_HAS_TIME_SIGNATURE, CLAP_TRANSPORT_IS_LOOP_ACTIVE, CLAP_TRANSPORT_IS_PLAYING,
-    CLAP_TRANSPORT_IS_RECORDING, CLAP_TRANSPORT_IS_WITHIN_PRE_ROLL,
+use clack_extensions::audio_ports::{
+    AudioPortFlags, AudioPortInfoData, AudioPortInfoWriter, AudioPortType, PluginAudioPorts,
+    PluginAudioPortsImpl,
 };
-use clap_sys::ext::audio_ports::{
-    clap_audio_port_info, clap_plugin_audio_ports, CLAP_AUDIO_PORT_IS_MAIN, CLAP_EXT_AUDIO_PORTS,
-    CLAP_PORT_MONO, CLAP_PORT_STEREO,
+use clack_extensions::audio_ports_config::{
+    AudioPortConfigSelectError, AudioPortConfigWriter, AudioPortsConfiguration, MainPortInfo,
+    PluginAudioPortsConfig, PluginAudioPortsConfigImpl,
 };
-use clap_sys::ext::audio_ports_config::{
-    clap_audio_ports_config, clap_plugin_audio_ports_config, CLAP_EXT_AUDIO_PORTS_CONFIG,
+use clack_extensions::gui::{
+    GuiApiType, GuiError, GuiResizeHints, GuiSize, HostGui, PluginGui, PluginGuiImpl, Window,
 };
+use clack_extensions::latency::{HostLatency, PluginLatency, PluginLatencyImpl};
+use clack_extensions::note_ports::{
+    NoteDialect, NoteDialects, NotePortInfoData, NotePortInfoWriter, PluginNotePorts,
+    PluginNotePortsImpl,
 use clap_sys::ext::draft::remote_controls::{
     clap_plugin_remote_controls, clap_remote_controls_page, CLAP_EXT_REMOTE_CONTROLS,
 };
-use clap_sys::ext::gui::{
-    clap_gui_resize_hints, clap_host_gui, clap_plugin_gui, clap_window, CLAP_EXT_GUI,
-    CLAP_WINDOW_API_COCOA, CLAP_WINDOW_API_WIN32, CLAP_WINDOW_API_X11,
+use clack_extensions::params::implementation::{
+    ParamDisplayWriter, ParamInfoWriter, PluginMainThreadParams, PluginParamsImpl,
 };
-use clap_sys::ext::latency::{clap_host_latency, clap_plugin_latency, CLAP_EXT_LATENCY};
-use clap_sys::ext::note_ports::{
-    clap_note_port_info, clap_plugin_note_ports, CLAP_EXT_NOTE_PORTS, CLAP_NOTE_DIALECT_CLAP,
-    CLAP_NOTE_DIALECT_MIDI,
+use clack_extensions::params::info::{ParamInfoData, ParamInfoFlags};
+use clack_extensions::params::{HostParams, ParamRescanFlags, PluginParams};
+use clack_extensions::render::{PluginRender, PluginRenderError, PluginRenderImpl, RenderMode};
+use clack_extensions::state::PluginStateImpl;
+use clack_extensions::tail::{PluginTail, PluginTailImpl, TailLength};
+use clack_extensions::thread_check::HostThreadCheck;
+use clack_extensions::voice_info::{
+    HostVoiceInfo, PluginVoiceInfo, PluginVoiceInfoImpl, VoiceInfo, VoiceInfoFlags,
 };
-use clap_sys::ext::params::{
-    clap_host_params, clap_param_info, clap_plugin_params, CLAP_EXT_PARAMS,
-    CLAP_PARAM_IS_AUTOMATABLE, CLAP_PARAM_IS_BYPASS, CLAP_PARAM_IS_HIDDEN,
-    CLAP_PARAM_IS_MODULATABLE, CLAP_PARAM_IS_MODULATABLE_PER_NOTE_ID, CLAP_PARAM_IS_READONLY,
-    CLAP_PARAM_IS_STEPPED, CLAP_PARAM_RESCAN_VALUES,
+use clack_plugin::events::event_types::{
+    MidiEvent, MidiSysExEvent, NoteChokeEvent, NoteEndEvent, NoteExpressionEvent,
+    NoteExpressionType, NoteOffEvent, NoteOnEvent, ParamGestureBeginEvent, ParamGestureEndEvent,
+    ParamValueEvent, TransportEvent, TransportFlags,
 };
-use clap_sys::ext::render::{
-    clap_plugin_render, clap_plugin_render_mode, CLAP_EXT_RENDER, CLAP_RENDER_OFFLINE,
-    CLAP_RENDER_REALTIME,
+use clack_plugin::events::spaces::CoreEventSpace;
+use clack_plugin::events::{EventFlags, EventHeader};
+use clack_plugin::extensions::PluginExtensions;
+use clack_plugin::host::{HostAudioThreadHandle, HostHandle, HostMainThreadHandle};
+use clack_plugin::plugin::{AudioConfiguration, PluginError};
+use clack_plugin::prelude::{
+    Audio, Events, InputEvents, OutputEvents, PluginMainThread, PluginShared, Process, UnknownEvent,
 };
-use clap_sys::ext::state::{clap_plugin_state, CLAP_EXT_STATE};
-use clap_sys::ext::tail::{clap_plugin_tail, CLAP_EXT_TAIL};
-use clap_sys::ext::thread_check::{clap_host_thread_check, CLAP_EXT_THREAD_CHECK};
-use clap_sys::ext::voice_info::{
-    clap_host_voice_info, clap_plugin_voice_info, clap_voice_info, CLAP_EXT_VOICE_INFO,
-    CLAP_VOICE_INFO_SUPPORTS_OVERLAPPING_NOTES,
-};
-use clap_sys::fixedpoint::{CLAP_BEATTIME_FACTOR, CLAP_SECTIME_FACTOR};
-use clap_sys::host::clap_host;
-use clap_sys::id::{clap_id, CLAP_INVALID_ID};
-use clap_sys::plugin::clap_plugin;
-use clap_sys::process::{
-    clap_process, clap_process_status, CLAP_PROCESS_CONTINUE, CLAP_PROCESS_CONTINUE_IF_NOT_QUIET,
-    CLAP_PROCESS_ERROR,
-};
-use clap_sys::stream::{clap_istream, clap_ostream};
+use clack_plugin::process::audio::ChannelPair;
+use clack_plugin::stream::{InputStream, OutputStream};
+use clack_plugin::utils::Cookie;
 use crossbeam::atomic::AtomicCell;
 use crossbeam::channel::{self, SendTimeoutError};
 use crossbeam::queue::ArrayQueue;
 use parking_lot::Mutex;
-use raw_window_handle::RawWindowHandle;
+use raw_window_handle::HasRawWindowHandle;
 use std::any::Any;
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::ffi::{c_void, CStr};
-use std::mem;
-use std::num::NonZeroU32;
-use std::os::raw::c_char;
-use std::ptr::NonNull;
+use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 use std::thread::{self, ThreadId};
 use std::time::Duration;
 
 use super::context::{WrapperGuiContext, WrapperInitContext, WrapperProcessContext};
 use super::descriptor::PluginDescriptor;
-use super::util::ClapPtr;
+use crate::buffer::Buffer;
+use crate::context::gui::AsyncExecutor;
+use crate::context::process::Transport;
+use crate::editor::{Editor, ParentWindowHandle};
 use crate::event_loop::{BackgroundThread, EventLoop, MainThreadExecutor, TASK_QUEUE_CAPACITY};
 use crate::midi::MidiResult;
 use crate::prelude::{
@@ -89,22 +74,31 @@ use crate::prelude::{
     ProcessMode, ProcessStatus, SysExMessage, TaskExecutor, Transport,
 };
 use crate::util::permit_alloc;
-use crate::wrapper::clap::context::RemoteControlPages;
-use crate::wrapper::clap::util::{read_stream, write_stream};
 use crate::wrapper::state::{self, PluginState};
 use crate::wrapper::util::buffer_management::{BufferManager, ChannelPointers};
 use crate::wrapper::util::{
-    clamp_input_event_timing, clamp_output_event_timing, hash_param_id, process_wrapper, strlcpy,
+    clamp_input_event_timing, clamp_output_event_timing, hash_param_id, process_wrapper,
 };
 
 /// How many output parameter changes we can store in our output parameter change queue. Storing
 /// more than this many parameters at a time will cause changes to get lost.
 const OUTPUT_EVENT_QUEUE_CAPACITY: usize = 2048;
 
-pub struct Wrapper<P: ClapPlugin> {
-    /// A reference to this object, upgraded to an `Arc<Self>` for the GUI context.
-    this: AtomicRefCell<Weak<Self>>,
+pub struct ClapWrapperAudioProcessor<'a, P: ClapPlugin> {
+    shared: Arc<Wrapper<'a, P>>,
+    host: HostAudioThreadHandle<'a>,
+}
 
+pub struct ClapWrapperMainThread<'a, P: ClapPlugin> {
+    shared: Arc<Wrapper<'a, P>>,
+    host: HostMainThreadHandle<'a>,
+}
+
+pub struct ClapWrapperShared<'a, P: ClapPlugin> {
+    wrapper: Arc<Wrapper<'a, P>>,
+}
+
+pub struct Wrapper<'a, P: ClapPlugin> {
     /// The wrapped plugin instance.
     plugin: Mutex<P>,
     /// The plugin's background task executor closure.
@@ -165,29 +159,19 @@ pub struct Wrapper<P: ClapPlugin> {
     updated_state_receiver: channel::Receiver<PluginState>,
 
     // We'll query all of the host's extensions upfront
-    host_callback: ClapPtr<clap_host>,
+    host: HostHandle<'a>,
 
     clap_plugin_audio_ports_config: clap_plugin_audio_ports_config,
 
-    // The main `clap_plugin` vtable. A pointer to this `Wrapper<P>` instance is stored in the
-    // `plugin_data` field. This pointer is set after creating the `Arc<Wrapper<P>>`.
-    pub clap_plugin: AtomicRefCell<clap_plugin>,
     /// Needs to be boxed because the plugin object is supposed to contain a static reference to
     /// this.
     _plugin_descriptor: Box<PluginDescriptor<P>>,
 
-    clap_plugin_audio_ports: clap_plugin_audio_ports,
+    host_gui: Option<&'a HostGui>,
 
-    clap_plugin_gui: clap_plugin_gui,
-    host_gui: AtomicRefCell<Option<ClapPtr<clap_host_gui>>>,
+    host_latency: Option<&'a HostLatency>,
 
-    clap_plugin_latency: clap_plugin_latency,
-    host_latency: AtomicRefCell<Option<ClapPtr<clap_host_latency>>>,
-
-    clap_plugin_note_ports: clap_plugin_note_ports,
-
-    clap_plugin_params: clap_plugin_params,
-    host_params: AtomicRefCell<Option<ClapPtr<clap_host_params>>>,
+    host_params: Option<&'a HostParams>,
     // These fields are exactly the same as their VST3 wrapper counterparts.
     //
     /// The keys from `param_map` in a stable order.
@@ -224,7 +208,7 @@ pub struct Wrapper<P: ClapPlugin> {
     ///      in the same order, right?
     output_parameter_events: ArrayQueue<OutputParamEvent>,
 
-    host_thread_check: AtomicRefCell<Option<ClapPtr<clap_host_thread_check>>>,
+    host_thread_check: Option<&'a HostThreadCheck>,
 
     clap_plugin_remote_controls: clap_plugin_remote_controls,
     /// The plugin's remote control pages, if it defines any. Filled when initializing the plugin.
@@ -232,12 +216,9 @@ pub struct Wrapper<P: ClapPlugin> {
 
     clap_plugin_render: clap_plugin_render,
 
-    clap_plugin_state: clap_plugin_state,
-
-    clap_plugin_tail: clap_plugin_tail,
-
-    clap_plugin_voice_info: clap_plugin_voice_info,
-    host_voice_info: AtomicRefCell<Option<ClapPtr<clap_host_voice_info>>>,
+    // TODO: support voice info
+    host_voice_info: Option<&'a HostVoiceInfo>,
+    // host_voice_info: AtomicRefCell<Option<ClapPtr<clap_host_voice_info>>>,
     /// If `P::CLAP_POLY_MODULATION_CONFIG` is set, then the plugin can configure the current number
     /// of active voices using a context method called from the initialization or processing
     /// context. This defaults to the maximum number of voices.
@@ -256,7 +237,7 @@ pub struct Wrapper<P: ClapPlugin> {
     main_thread_id: ThreadId,
     /// A background thread for running tasks independently from the host'main GUI thread. Useful
     /// for longer, blocking tasks. Initialized later as it needs a reference to the wrapper.
-    background_thread: AtomicRefCell<Option<BackgroundThread<Task<P>, Self>>>,
+    background_thread: AtomicRefCell<Option<BackgroundThread<Task<P>, Wrapper<'a, P>>>>,
 }
 
 /// Tasks that can be sent from the plugin to be executed on the main thread in a non-blocking
@@ -328,8 +309,7 @@ impl<P: ClapPlugin> EventLoop<Task<P>, Wrapper<P>> for Wrapper<P> {
             let success = self.tasks.push(task).is_ok();
             if success {
                 // CLAP lets us use the host's event loop instead of having to implement our own
-                let host = &self.host_callback;
-                unsafe_clap_call! { host=>request_callback(&**host) };
+                self.host.request_callback();
             }
 
             success
@@ -347,18 +327,15 @@ impl<P: ClapPlugin> EventLoop<Task<P>, Wrapper<P>> for Wrapper<P> {
     fn is_main_thread(&self) -> bool {
         // If the host supports the thread check interface then we'll use that, otherwise we'll
         // check if this is the same thread as the one that created the plugin instance.
-        match &*self.host_thread_check.borrow() {
-            Some(thread_check) => {
-                unsafe_clap_call! { thread_check=>is_main_thread(&*self.host_callback) }
-            }
+        self.host_thread_check
+            .and_then(|thread_check| thread_check.is_main_thread(&self.host))
             // FIXME: `thread::current()` may allocate the first time it's called, is there a safe
             //        non-allocating version of this without using huge OS-specific libraries?
-            None => permit_alloc(|| thread::current().id() == self.main_thread_id),
-        }
+            .unwrap_or_else(|| permit_alloc(|| thread::current().id() == self.main_thread_id))
     }
 }
 
-impl<P: ClapPlugin> MainThreadExecutor<Task<P>> for Wrapper<P> {
+impl<'a, P: ClapPlugin> MainThreadExecutor<Task<P>> for Wrapper<'a, P> {
     fn execute(&self, task: Task<P>, is_gui_thread: bool) {
         // This function is always called from the main thread, from [Self::on_main_thread].
         match task {
@@ -390,7 +367,7 @@ impl<P: ClapPlugin> MainThreadExecutor<Task<P>> for Wrapper<P> {
                     }
                 }
             }
-            Task::LatencyChanged => match &*self.host_latency.borrow() {
+            Task::LatencyChanged => match &self.host_latency {
                 Some(host_latency) => {
                     nih_debug_assert!(is_gui_thread);
 
@@ -399,9 +376,12 @@ impl<P: ClapPlugin> MainThreadExecutor<Task<P>> for Wrapper<P> {
                     //      is processing, but we'll treat it as the same thing). In practice just
                     //      calling the latency changed function also seems to work just fine.
                     if self.is_processing.load(Ordering::SeqCst) {
-                        unsafe_clap_call! { &*self.host_callback=>request_restart(&*self.host_callback) };
+                        self.host.request_restart();
                     } else {
-                        unsafe_clap_call! { host_latency=>changed(&*self.host_callback) };
+                        // FIXME: This is unsound: it should only be called on the Main Thread with exclusive access.
+                        unsafe {
+                            host_latency.changed(&mut self.host.as_main_thread_unchecked());
+                        }
                     }
                 }
                 None => nih_debug_assert_failure!("Host does not support the latency extension"),
@@ -409,14 +389,23 @@ impl<P: ClapPlugin> MainThreadExecutor<Task<P>> for Wrapper<P> {
             Task::VoiceInfoChanged => match &*self.host_voice_info.borrow() {
                 Some(host_voice_info) => {
                     nih_debug_assert!(is_gui_thread);
-                    unsafe_clap_call! { host_voice_info=>changed(&*self.host_callback) };
+                    // FIXME: This is unsound: it should only be called on the Main Thread with exclusive access.
+                    unsafe {
+                        host_voice_info.changed(&mut self.host.as_main_thread_unchecked());
+                    }
                 }
                 None => nih_debug_assert_failure!("Host does not support the voice-info extension"),
             },
             Task::RescanParamValues => match &*self.host_params.borrow() {
                 Some(host_params) => {
                     nih_debug_assert!(is_gui_thread);
-                    unsafe_clap_call! { host_params=>rescan(&*self.host_callback, CLAP_PARAM_RESCAN_VALUES) };
+                    // FIXME: This is unsound: it should only be called on the Main Thread with exclusive access.
+                    unsafe {
+                        host_params.rescan(
+                            &mut self.host.as_main_thread_unchecked(),
+                            ParamRescanFlags::VALUES,
+                        );
+                    }
                 }
                 None => nih_debug_assert_failure!("The host does not support parameters? What?"),
             },
@@ -424,8 +413,8 @@ impl<P: ClapPlugin> MainThreadExecutor<Task<P>> for Wrapper<P> {
     }
 }
 
-impl<P: ClapPlugin> Wrapper<P> {
-    pub fn new(host_callback: *const clap_host) -> Arc<Self> {
+impl<'a, P: ClapPlugin> PluginShared<'a> for ClapWrapperShared<'a, P> {
+    fn new(host: HostHandle<'a>) -> Result<Self, PluginError> {
         let mut plugin = P::default();
         let task_executor = Mutex::new(plugin.task_executor());
 
@@ -434,11 +423,6 @@ impl<P: ClapPlugin> Wrapper<P> {
         let (updated_state_sender, updated_state_receiver) = channel::bounded(0);
 
         let plugin_descriptor: Box<PluginDescriptor<P>> = Box::default();
-
-        // We're not allowed to query any extensions until the init function has been called, so we
-        // need a bunch of AtomicRefCells instead
-        assert!(!host_callback.is_null());
-        let host_callback = unsafe { ClapPtr::new(host_callback) };
 
         // This is a mapping from the parameter IDs specified by the plugin to pointers to those
         // parameters. These pointers are assumed to be safe to dereference as long as
@@ -529,9 +513,7 @@ impl<P: ClapPlugin> Wrapper<P> {
             &param_ptr_to_hash,
         );
 
-        let wrapper = Self {
-            this: AtomicRefCell::new(Weak::new()),
-
+        let wrapper = Arc::new(Wrapper {
             plugin: Mutex::new(plugin),
             task_executor,
             params,
@@ -559,78 +541,17 @@ impl<P: ClapPlugin> Wrapper<P> {
             updated_state_sender,
             updated_state_receiver,
 
-            host_callback,
+            host,
 
-            clap_plugin: AtomicRefCell::new(clap_plugin {
-                // This needs to live on the heap because the plugin object contains a direct
-                // reference to the manifest as a value. We could share this between instances of
-                // the plugin using an `Arc`, but this doesn't consume a lot of memory so it's not a
-                // huge deal.
-                desc: plugin_descriptor.clap_plugin_descriptor(),
-                // This pointer will be set to point at our wrapper instance later
-                plugin_data: std::ptr::null_mut(),
-                init: Some(Self::init),
-                destroy: Some(Self::destroy),
-                activate: Some(Self::activate),
-                deactivate: Some(Self::deactivate),
-                start_processing: Some(Self::start_processing),
-                stop_processing: Some(Self::stop_processing),
-                reset: Some(Self::reset),
-                process: Some(Self::process),
-                get_extension: Some(Self::get_extension),
-                on_main_thread: Some(Self::on_main_thread),
-            }),
             _plugin_descriptor: plugin_descriptor,
 
-            clap_plugin_audio_ports_config: clap_plugin_audio_ports_config {
-                count: Some(Self::ext_audio_ports_config_count),
-                get: Some(Self::ext_audio_ports_config_get),
-                select: Some(Self::ext_audio_ports_config_select),
-            },
+            supported_bus_configs,
 
-            clap_plugin_audio_ports: clap_plugin_audio_ports {
-                count: Some(Self::ext_audio_ports_count),
-                get: Some(Self::ext_audio_ports_get),
-            },
+            host_gui: host.extension(),
 
-            clap_plugin_gui: clap_plugin_gui {
-                is_api_supported: Some(Self::ext_gui_is_api_supported),
-                get_preferred_api: Some(Self::ext_gui_get_preferred_api),
-                create: Some(Self::ext_gui_create),
-                destroy: Some(Self::ext_gui_destroy),
-                set_scale: Some(Self::ext_gui_set_scale),
-                get_size: Some(Self::ext_gui_get_size),
-                can_resize: Some(Self::ext_gui_can_resize),
-                get_resize_hints: Some(Self::ext_gui_get_resize_hints),
-                adjust_size: Some(Self::ext_gui_adjust_size),
-                set_size: Some(Self::ext_gui_set_size),
-                set_parent: Some(Self::ext_gui_set_parent),
-                set_transient: Some(Self::ext_gui_set_transient),
-                suggest_title: Some(Self::ext_gui_suggest_title),
-                show: Some(Self::ext_gui_show),
-                hide: Some(Self::ext_gui_hide),
-            },
-            host_gui: AtomicRefCell::new(None),
+            host_latency: host.extension(),
 
-            clap_plugin_latency: clap_plugin_latency {
-                get: Some(Self::ext_latency_get),
-            },
-            host_latency: AtomicRefCell::new(None),
-
-            clap_plugin_note_ports: clap_plugin_note_ports {
-                count: Some(Self::ext_note_ports_count),
-                get: Some(Self::ext_note_ports_get),
-            },
-
-            clap_plugin_params: clap_plugin_params {
-                count: Some(Self::ext_params_count),
-                get_info: Some(Self::ext_params_get_info),
-                get_value: Some(Self::ext_params_get_value),
-                value_to_text: Some(Self::ext_params_value_to_text),
-                text_to_value: Some(Self::ext_params_text_to_value),
-                flush: Some(Self::ext_params_flush),
-            },
-            host_params: AtomicRefCell::new(None),
+            host_params: host.extension(),
             param_hashes,
             param_by_hash,
             param_id_by_hash,
@@ -640,32 +561,10 @@ impl<P: ClapPlugin> Wrapper<P> {
             poly_mod_ids_by_hash,
             output_parameter_events: ArrayQueue::new(OUTPUT_EVENT_QUEUE_CAPACITY),
 
-            host_thread_check: AtomicRefCell::new(None),
-
-            clap_plugin_remote_controls: clap_plugin_remote_controls {
-                count: Some(Self::ext_remote_controls_count),
-                get: Some(Self::ext_remote_controls_get),
-            },
+            host_thread_check: host.extension(),
             remote_control_pages,
 
-            clap_plugin_render: clap_plugin_render {
-                has_hard_realtime_requirement: Some(Self::ext_render_has_hard_realtime_requirement),
-                set: Some(Self::ext_render_set),
-            },
-
-            clap_plugin_state: clap_plugin_state {
-                save: Some(Self::ext_state_save),
-                load: Some(Self::ext_state_load),
-            },
-
-            clap_plugin_tail: clap_plugin_tail {
-                get: Some(Self::ext_tail_get),
-            },
-
-            clap_plugin_voice_info: clap_plugin_voice_info {
-                get: Some(Self::ext_voice_info_get),
-            },
-            host_voice_info: AtomicRefCell::new(None),
+            host_voice_info: host.extension(),
             current_voice_capacity: AtomicU32::new(
                 P::CLAP_POLY_MODULATION_CONFIG
                     .map(|c| {
@@ -682,16 +581,7 @@ impl<P: ClapPlugin> Wrapper<P> {
             main_thread_id: thread::current().id(),
             // Initialized later as it needs a reference to the wrapper for the executor
             background_thread: AtomicRefCell::new(None),
-        };
-
-        // Finally, the wrapper needs to contain a reference to itself so we can create GuiContexts
-        // when opening plugin editors
-        let wrapper = Arc::new(wrapper);
-        *wrapper.this.borrow_mut() = Arc::downgrade(&wrapper);
-
-        // The `clap_plugin::plugin_data` field needs to point to this wrapper so we can access it
-        // from the vtable functions
-        wrapper.clap_plugin.borrow_mut().plugin_data = Arc::as_ptr(&wrapper) as *mut _;
+        });
 
         // The editor also needs to be initialized later so the Async executor can work.
         *wrapper.editor.borrow_mut() = wrapper
@@ -721,10 +611,12 @@ impl<P: ClapPlugin> Wrapper<P> {
         *wrapper.background_thread.borrow_mut() =
             Some(BackgroundThread::get_or_create(Arc::downgrade(&wrapper)));
 
-        wrapper
+        Ok(Self { wrapper })
     }
+}
 
-    fn make_gui_context(self: Arc<Self>) -> Arc<WrapperGuiContext<P>> {
+impl<'a, P: ClapPlugin> Wrapper<'a, P> {
+    fn make_gui_context(self: Arc<Self>) -> Arc<WrapperGuiContext<'a, P>> {
         Arc::new(WrapperGuiContext {
             wrapper: self,
             #[cfg(debug_assertions)]
@@ -773,10 +665,8 @@ impl<P: ClapPlugin> Wrapper<P> {
         let result = self.output_parameter_events.push(event).is_ok();
 
         // Requesting a flush is fine even during audio processing. This avoids a race condition.
-        match &*self.host_params.borrow() {
-            Some(host_params) => {
-                unsafe_clap_call! { host_params=>request_flush(&*self.host_callback) }
-            }
+        match self.host_params {
+            Some(host_params) => host_params.request_flush(&self.host),
             None => nih_debug_assert_failure!("The host does not support parameters? What?"),
         }
 
@@ -787,21 +677,18 @@ impl<P: ClapPlugin> Wrapper<P> {
     /// safely be called from any thread. If this returns `false`, then the plugin should reset its
     /// size back to the previous value.
     pub fn request_resize(&self) -> bool {
-        match (
-            self.host_gui.borrow().as_ref(),
-            self.editor.borrow().as_ref(),
-        ) {
+        match (self.host_gui, self.editor.borrow().as_ref()) {
             (Some(host_gui), Some(editor)) => {
                 let (unscaled_width, unscaled_height) = editor.lock().size();
                 let scaling_factor = self.editor_scaling_factor.load(Ordering::Relaxed);
 
-                unsafe_clap_call! {
-                    host_gui=>request_resize(
-                        &*self.host_callback,
+                host_gui
+                    .request_resize(
+                        &self.host,
                         (unscaled_width as f32 * scaling_factor).round() as u32,
                         (unscaled_height as f32 * scaling_factor).round() as u32,
                     )
-                }
+                    .is_ok()
             }
             _ => false,
         }
@@ -877,18 +764,16 @@ impl<P: ClapPlugin> Wrapper<P> {
     }
 
     /// Handle all incoming events from an event queue. This will clear `self.input_events` first.
-    pub unsafe fn handle_in_events(
+    pub fn handle_in_events(
         &self,
-        in_: &clap_input_events,
+        in_: &InputEvents,
         current_sample_idx: usize,
         total_buffer_len: usize,
     ) {
         let mut input_events = self.input_events.borrow_mut();
         input_events.clear();
 
-        let num_events = clap_call! { in_=>size(in_) };
-        for event_idx in 0..num_events {
-            let event = clap_call! { in_=>get(in_, event_idx) };
+        for event in in_ {
             self.handle_in_event(
                 event,
                 &mut input_events,
@@ -908,26 +793,27 @@ impl<P: ClapPlugin> Wrapper<P> {
     /// `(sample_idx, event_idx)` tuple. This allows for splitting the audio buffer into segments
     /// with distinct sample values to enable sample accurate automation without modifications to the
     /// wrapped plugin.
-    pub unsafe fn handle_in_events_until(
+    pub fn handle_in_events_until(
         &self,
-        in_: &clap_input_events,
-        transport_info: &mut *const clap_event_transport,
+        in_: &InputEvents,
+        transport_info: &mut &TransportEvent,
         current_sample_idx: usize,
         total_buffer_len: usize,
         resume_from_event_idx: usize,
-        stop_predicate: impl Fn(*const clap_event_header) -> bool,
+        stop_predicate: impl Fn(&UnknownEvent) -> bool,
     ) -> Option<(usize, usize)> {
         let mut input_events = self.input_events.borrow_mut();
         input_events.clear();
 
         // To achieve this, we'll always read one event ahead
-        let num_events = clap_call! { in_=>size(in_) };
+        let num_events = in_.len();
         if num_events == 0 {
             return None;
         }
 
         let start_idx = resume_from_event_idx as u32;
-        let mut event: *const clap_event_header = clap_call! { in_=>get(in_, start_idx) };
+        let mut event = in_.get(start_idx)?;
+
         for next_event_idx in (start_idx + 1)..num_events {
             self.handle_in_event(
                 event,
@@ -939,12 +825,10 @@ impl<P: ClapPlugin> Wrapper<P> {
 
             // Stop just before the next parameter change or transport information event at a sample
             // after the current sample
-            let next_event: *const clap_event_header = clap_call! { in_=>get(in_, next_event_idx) };
-            if (*next_event).time > current_sample_idx as u32 && stop_predicate(next_event) {
-                return Some(((*next_event).time as usize, next_event_idx as usize));
+            event = in_.get(next_event_idx)?;
+            if event.header().time() > current_sample_idx as u32 && stop_predicate(event) {
+                return Some((event.header().time() as usize, next_event_idx as usize));
             }
-
-            event = next_event;
         }
 
         // Don't forget about the last event
@@ -965,9 +849,9 @@ impl<P: ClapPlugin> Wrapper<P> {
     /// plugin is not actually processing audio.
     ///
     /// The `total_buffer_len` argument is used to clamp out of bounds events to the buffer's length.
-    pub unsafe fn handle_out_events(
+    pub fn handle_out_events(
         &self,
-        out: &clap_output_events,
+        out: &mut OutputEvents,
         current_sample_idx: usize,
         total_buffer_len: usize,
     ) {
@@ -977,18 +861,10 @@ impl<P: ClapPlugin> Wrapper<P> {
         while let Some(change) = self.output_parameter_events.pop() {
             let push_successful = match change {
                 OutputParamEvent::BeginGesture { param_hash } => {
-                    let event = clap_event_param_gesture {
-                        header: clap_event_header {
-                            size: mem::size_of::<clap_event_param_gesture>() as u32,
-                            time: current_sample_idx as u32,
-                            space_id: CLAP_CORE_EVENT_SPACE_ID,
-                            type_: CLAP_EVENT_PARAM_GESTURE_BEGIN,
-                            flags: CLAP_EVENT_IS_LIVE,
-                        },
-                        param_id: param_hash,
-                    };
-
-                    clap_call! { out=>try_push(out, &event.header) }
+                    out.try_push(ParamGestureBeginEvent::new(
+                        EventHeader::new_core(current_sample_idx as u32, EventFlags::IS_LIVE),
+                        param_hash,
+                    ))
                 }
                 OutputParamEvent::SetValue {
                     param_hash,
@@ -1000,42 +876,26 @@ impl<P: ClapPlugin> Wrapper<P> {
                         sample_rate,
                     );
 
-                    let event = clap_event_param_value {
-                        header: clap_event_header {
-                            size: mem::size_of::<clap_event_param_value>() as u32,
-                            time: current_sample_idx as u32,
-                            space_id: CLAP_CORE_EVENT_SPACE_ID,
-                            type_: CLAP_EVENT_PARAM_VALUE,
-                            flags: CLAP_EVENT_IS_LIVE,
-                        },
-                        param_id: param_hash,
-                        cookie: std::ptr::null_mut(),
-                        port_index: -1,
-                        note_id: -1,
-                        channel: -1,
-                        key: -1,
-                        value: clap_plain_value,
-                    };
-
-                    clap_call! { out=>try_push(out, &event.header) }
+                    out.try_push(ParamValueEvent::new(
+                        EventHeader::new_core(current_sample_idx as u32, EventFlags::IS_LIVE),
+                        Cookie::empty(),
+                        -1,
+                        param_hash,
+                        -1,
+                        -1,
+                        -1,
+                        clap_plain_value,
+                    ))
                 }
                 OutputParamEvent::EndGesture { param_hash } => {
-                    let event = clap_event_param_gesture {
-                        header: clap_event_header {
-                            size: mem::size_of::<clap_event_param_gesture>() as u32,
-                            time: current_sample_idx as u32,
-                            space_id: CLAP_CORE_EVENT_SPACE_ID,
-                            type_: CLAP_EVENT_PARAM_GESTURE_END,
-                            flags: CLAP_EVENT_IS_LIVE,
-                        },
-                        param_id: param_hash,
-                    };
-
-                    clap_call! { out=>try_push(out, &event.header) }
+                    out.try_push(ParamGestureEndEvent::new(
+                        EventHeader::new_core(current_sample_idx as u32, EventFlags::IS_LIVE),
+                        param_hash,
+                    ))
                 }
             };
 
-            nih_debug_assert!(push_successful);
+            nih_debug_assert!(push_successful.is_ok());
         }
 
         // Also send all note events generated by the plugin
@@ -1055,23 +915,20 @@ impl<P: ClapPlugin> Wrapper<P> {
                     note,
                     velocity,
                 } if P::MIDI_OUTPUT >= MidiConfig::Basic => {
-                    let event = clap_event_note {
-                        header: clap_event_header {
-                            size: mem::size_of::<clap_event_note>() as u32,
-                            time,
-                            space_id: CLAP_CORE_EVENT_SPACE_ID,
-                            type_: CLAP_EVENT_NOTE_ON,
-                            // We don't have a way to denote live events
-                            flags: 0,
-                        },
-                        note_id: voice_id.unwrap_or(-1),
-                        port_index: 0,
-                        channel: channel as i16,
-                        key: note as i16,
-                        velocity: velocity as f64,
-                    };
-
-                    clap_call! { out=>try_push(out, &event.header) }
+                    out.try_push(NoteOnEvent(
+                        clack_plugin::events::event_types::NoteEvent::new(
+                            EventHeader::new_core(
+                                time,
+                                // We don't have a way to denote live events
+                                EventFlags::empty(),
+                            ),
+                            voice_id.unwrap_or(-1),
+                            0,
+                            note as i16,
+                            channel as i16,
+                            velocity as f64,
+                        ),
+                    ))
                 }
                 NoteEvent::NoteOff {
                     timing: _,
@@ -1079,24 +936,16 @@ impl<P: ClapPlugin> Wrapper<P> {
                     channel,
                     note,
                     velocity,
-                } if P::MIDI_OUTPUT >= MidiConfig::Basic => {
-                    let event = clap_event_note {
-                        header: clap_event_header {
-                            size: mem::size_of::<clap_event_note>() as u32,
-                            time,
-                            space_id: CLAP_CORE_EVENT_SPACE_ID,
-                            type_: CLAP_EVENT_NOTE_OFF,
-                            flags: 0,
-                        },
-                        note_id: voice_id.unwrap_or(-1),
-                        port_index: 0,
-                        channel: channel as i16,
-                        key: note as i16,
-                        velocity: velocity as f64,
-                    };
-
-                    clap_call! { out=>try_push(out, &event.header) }
-                }
+                } if P::MIDI_OUTPUT >= MidiConfig::Basic => out.try_push(NoteOffEvent(
+                    clack_plugin::events::event_types::NoteEvent::new(
+                        EventHeader::new_core(time, EventFlags::empty()),
+                        voice_id.unwrap_or(-1),
+                        0,
+                        note as i16,
+                        channel as i16,
+                        velocity as f64,
+                    ),
+                )),
                 // NOTE: This is gated behind `P::MIDI_INPUT`, because this is a merely a hint event
                 //       for the host. It is not output to any other plugin or device.
                 NoteEvent::VoiceTerminated {
@@ -1104,199 +953,121 @@ impl<P: ClapPlugin> Wrapper<P> {
                     voice_id,
                     channel,
                     note,
-                } if P::MIDI_INPUT >= MidiConfig::Basic => {
-                    let event = clap_event_note {
-                        header: clap_event_header {
-                            size: mem::size_of::<clap_event_note>() as u32,
-                            time,
-                            space_id: CLAP_CORE_EVENT_SPACE_ID,
-                            type_: CLAP_EVENT_NOTE_END,
-                            flags: 0,
-                        },
-                        note_id: voice_id.unwrap_or(-1),
-                        port_index: 0,
-                        channel: channel as i16,
-                        key: note as i16,
-                        velocity: 0.0,
-                    };
-
-                    clap_call! { out=>try_push(out, &event.header) }
-                }
+                } if P::MIDI_INPUT >= MidiConfig::Basic => out.try_push(NoteEndEvent(
+                    clack_plugin::events::event_types::NoteEvent::new(
+                        EventHeader::new_core(time, EventFlags::empty()),
+                        voice_id.unwrap_or(-1),
+                        0,
+                        note as i16,
+                        channel as i16,
+                        0.0,
+                    ),
+                )),
                 NoteEvent::PolyPressure {
                     timing: _,
                     voice_id,
                     channel,
                     note,
                     pressure,
-                } if P::MIDI_OUTPUT >= MidiConfig::Basic => {
-                    let event = clap_event_note_expression {
-                        header: clap_event_header {
-                            size: mem::size_of::<clap_event_note_expression>() as u32,
-                            time,
-                            space_id: CLAP_CORE_EVENT_SPACE_ID,
-                            type_: CLAP_EVENT_NOTE_EXPRESSION,
-                            flags: 0,
-                        },
-                        expression_id: CLAP_NOTE_EXPRESSION_PRESSURE,
-                        note_id: voice_id.unwrap_or(-1),
-                        port_index: 0,
-                        channel: channel as i16,
-                        key: note as i16,
-                        value: pressure as f64,
-                    };
-
-                    clap_call! { out=>try_push(out, &event.header) }
-                }
+                } if P::MIDI_OUTPUT >= MidiConfig::Basic => out.try_push(NoteExpressionEvent::new(
+                    EventHeader::new_core(time, EventFlags::empty()),
+                    voice_id.unwrap_or(-1),
+                    0,
+                    note as i16,
+                    channel as i16,
+                    pressure as f64,
+                    NoteExpressionType::Pressure,
+                )),
                 NoteEvent::PolyVolume {
                     timing: _,
                     voice_id,
                     channel,
                     note,
                     gain,
-                } if P::MIDI_OUTPUT >= MidiConfig::Basic => {
-                    let event = clap_event_note_expression {
-                        header: clap_event_header {
-                            size: mem::size_of::<clap_event_note_expression>() as u32,
-                            time,
-                            space_id: CLAP_CORE_EVENT_SPACE_ID,
-                            type_: CLAP_EVENT_NOTE_EXPRESSION,
-                            flags: 0,
-                        },
-                        expression_id: CLAP_NOTE_EXPRESSION_VOLUME,
-                        note_id: voice_id.unwrap_or(-1),
-                        port_index: 0,
-                        channel: channel as i16,
-                        key: note as i16,
-                        value: gain as f64,
-                    };
-
-                    clap_call! { out=>try_push(out, &event.header) }
-                }
+                } if P::MIDI_OUTPUT >= MidiConfig::Basic => out.try_push(NoteExpressionEvent::new(
+                    EventHeader::new_core(time, EventFlags::empty()),
+                    voice_id.unwrap_or(-1),
+                    0,
+                    note as i16,
+                    channel as i16,
+                    gain as f64,
+                    NoteExpressionType::Volume,
+                )),
                 NoteEvent::PolyPan {
                     timing: _,
                     voice_id,
                     channel,
                     note,
                     pan,
-                } if P::MIDI_OUTPUT >= MidiConfig::Basic => {
-                    let event = clap_event_note_expression {
-                        header: clap_event_header {
-                            size: mem::size_of::<clap_event_note_expression>() as u32,
-                            time,
-                            space_id: CLAP_CORE_EVENT_SPACE_ID,
-                            type_: CLAP_EVENT_NOTE_EXPRESSION,
-                            flags: 0,
-                        },
-                        expression_id: CLAP_NOTE_EXPRESSION_PAN,
-                        note_id: voice_id.unwrap_or(-1),
-                        port_index: 0,
-                        channel: channel as i16,
-                        key: note as i16,
-                        value: (pan as f64 + 1.0) / 2.0,
-                    };
-
-                    clap_call! { out=>try_push(out, &event.header) }
-                }
+                } if P::MIDI_OUTPUT >= MidiConfig::Basic => out.try_push(NoteExpressionEvent::new(
+                    EventHeader::new_core(time, EventFlags::empty()),
+                    voice_id.unwrap_or(-1),
+                    0,
+                    note as i16,
+                    channel as i16,
+                    pan as f64,
+                    NoteExpressionType::Pan,
+                )),
                 NoteEvent::PolyTuning {
                     timing: _,
                     voice_id,
                     channel,
                     note,
                     tuning,
-                } if P::MIDI_OUTPUT >= MidiConfig::Basic => {
-                    let event = clap_event_note_expression {
-                        header: clap_event_header {
-                            size: mem::size_of::<clap_event_note_expression>() as u32,
-                            time,
-                            space_id: CLAP_CORE_EVENT_SPACE_ID,
-                            type_: CLAP_EVENT_NOTE_EXPRESSION,
-                            flags: 0,
-                        },
-                        expression_id: CLAP_NOTE_EXPRESSION_TUNING,
-                        note_id: voice_id.unwrap_or(-1),
-                        port_index: 0,
-                        channel: channel as i16,
-                        key: note as i16,
-                        value: tuning as f64,
-                    };
-
-                    clap_call! { out=>try_push(out, &event.header) }
-                }
+                } if P::MIDI_OUTPUT >= MidiConfig::Basic => out.try_push(NoteExpressionEvent::new(
+                    EventHeader::new_core(time, EventFlags::empty()),
+                    voice_id.unwrap_or(-1),
+                    0,
+                    note as i16,
+                    channel as i16,
+                    tuning as f64,
+                    NoteExpressionType::Tuning,
+                )),
                 NoteEvent::PolyVibrato {
                     timing: _,
                     voice_id,
                     channel,
                     note,
                     vibrato,
-                } if P::MIDI_OUTPUT >= MidiConfig::Basic => {
-                    let event = clap_event_note_expression {
-                        header: clap_event_header {
-                            size: mem::size_of::<clap_event_note_expression>() as u32,
-                            time,
-                            space_id: CLAP_CORE_EVENT_SPACE_ID,
-                            type_: CLAP_EVENT_NOTE_EXPRESSION,
-                            flags: 0,
-                        },
-                        expression_id: CLAP_NOTE_EXPRESSION_VIBRATO,
-                        note_id: voice_id.unwrap_or(-1),
-                        port_index: 0,
-                        channel: channel as i16,
-                        key: note as i16,
-                        value: vibrato as f64,
-                    };
-
-                    clap_call! { out=>try_push(out, &event.header) }
-                }
+                } if P::MIDI_OUTPUT >= MidiConfig::Basic => out.try_push(NoteExpressionEvent::new(
+                    EventHeader::new_core(time, EventFlags::empty()),
+                    voice_id.unwrap_or(-1),
+                    0,
+                    note as i16,
+                    channel as i16,
+                    vibrato as f64,
+                    NoteExpressionType::Vibrato,
+                )),
                 NoteEvent::PolyExpression {
                     timing: _,
                     voice_id,
                     channel,
                     note,
                     expression,
-                } if P::MIDI_OUTPUT >= MidiConfig::Basic => {
-                    let event = clap_event_note_expression {
-                        header: clap_event_header {
-                            size: mem::size_of::<clap_event_note_expression>() as u32,
-                            time,
-                            space_id: CLAP_CORE_EVENT_SPACE_ID,
-                            type_: CLAP_EVENT_NOTE_EXPRESSION,
-                            flags: 0,
-                        },
-                        expression_id: CLAP_NOTE_EXPRESSION_EXPRESSION,
-                        note_id: voice_id.unwrap_or(-1),
-                        port_index: 0,
-                        channel: channel as i16,
-                        key: note as i16,
-                        value: expression as f64,
-                    };
-
-                    clap_call! { out=>try_push(out, &event.header) }
-                }
+                } if P::MIDI_OUTPUT >= MidiConfig::Basic => out.try_push(NoteExpressionEvent::new(
+                    EventHeader::new_core(time, EventFlags::empty()),
+                    voice_id.unwrap_or(-1),
+                    0,
+                    note as i16,
+                    channel as i16,
+                    expression as f64,
+                    NoteExpressionType::Expression,
+                )),
                 NoteEvent::PolyBrightness {
                     timing: _,
                     voice_id,
                     channel,
                     note,
                     brightness,
-                } if P::MIDI_OUTPUT >= MidiConfig::Basic => {
-                    let event = clap_event_note_expression {
-                        header: clap_event_header {
-                            size: mem::size_of::<clap_event_note_expression>() as u32,
-                            time,
-                            space_id: CLAP_CORE_EVENT_SPACE_ID,
-                            type_: CLAP_EVENT_NOTE_EXPRESSION,
-                            flags: 0,
-                        },
-                        expression_id: CLAP_NOTE_EXPRESSION_BRIGHTNESS,
-                        note_id: voice_id.unwrap_or(-1),
-                        port_index: 0,
-                        channel: channel as i16,
-                        key: note as i16,
-                        value: brightness as f64,
-                    };
-
-                    clap_call! { out=>try_push(out, &event.header) }
-                }
+                } if P::MIDI_OUTPUT >= MidiConfig::Basic => out.try_push(NoteExpressionEvent::new(
+                    EventHeader::new_core(time, EventFlags::empty()),
+                    voice_id.unwrap_or(-1),
+                    0,
+                    note as i16,
+                    channel as i16,
+                    brightness as f64,
+                    NoteExpressionType::Brightness,
+                )),
                 midi_event @ (NoteEvent::MidiChannelPressure { .. }
                 | NoteEvent::MidiPitchBend { .. }
                 | NoteEvent::MidiCC { .. }
@@ -1313,19 +1084,11 @@ impl<P: ClapPlugin> Wrapper<P> {
                         None => unreachable!("Missing MIDI conversion for MIDI event"),
                     };
 
-                    let event = clap_event_midi {
-                        header: clap_event_header {
-                            size: mem::size_of::<clap_event_midi>() as u32,
-                            time,
-                            space_id: CLAP_CORE_EVENT_SPACE_ID,
-                            type_: CLAP_EVENT_MIDI,
-                            flags: 0,
-                        },
-                        port_index: 0,
-                        data: midi_data,
-                    };
-
-                    clap_call! { out=>try_push(out, &event.header) }
+                    out.try_push(MidiEvent::new(
+                        EventHeader::new_core(time, EventFlags::empty()),
+                        0,
+                        midi_data,
+                    ))
                 }
                 NoteEvent::MidiSysEx { timing: _, message }
                     if P::MIDI_OUTPUT >= MidiConfig::Basic =>
@@ -1336,21 +1099,11 @@ impl<P: ClapPlugin> Wrapper<P> {
                     nih_debug_assert!(padded_sysex_buffer.len() >= length);
                     let sysex_buffer = &padded_sysex_buffer[..length];
 
-                    let event = clap_event_midi_sysex {
-                        header: clap_event_header {
-                            size: mem::size_of::<clap_event_midi_sysex>() as u32,
-                            time,
-                            space_id: CLAP_CORE_EVENT_SPACE_ID,
-                            type_: CLAP_EVENT_MIDI_SYSEX,
-                            flags: 0,
-                        },
-                        port_index: 0,
-                        // The host _should_ be making a copy of the data if it accepts the event. Should...
-                        buffer: sysex_buffer.as_ptr(),
-                        size: sysex_buffer.len() as u32,
-                    };
-
-                    clap_call! { out=>try_push(out, &event.header) }
+                    out.try_push(MidiSysExEvent::new(
+                        EventHeader::new_core(time, EventFlags::empty()),
+                        0,
+                        sysex_buffer,
+                    ))
                 }
                 _ => {
                     nih_debug_assert_failure!(
@@ -1360,7 +1113,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                 }
             };
 
-            nih_debug_assert!(push_successful, "Could not send note event");
+            nih_debug_assert!(push_successful.is_ok(), "Could not send note event");
         }
     }
 
@@ -1373,28 +1126,28 @@ impl<P: ClapPlugin> Wrapper<P> {
     ///
     /// If the event was a transport event and the `transport_info` argument is not `None`, then the
     /// pointer will be changed to point to the transport information from this event.
-    pub unsafe fn handle_in_event(
+    pub fn handle_in_event(
         &self,
-        event: *const clap_event_header,
+        event: &UnknownEvent,
         input_events: &mut AtomicRefMut<VecDeque<PluginNoteEvent<P>>>,
-        transport_info: Option<&mut *const clap_event_transport>,
+        transport_info: Option<&mut &TransportEvent>,
         current_sample_idx: usize,
         total_buffer_len: usize,
     ) {
-        let raw_event = &*event;
-
         // Out of bounds events are clamped to the buffer's size
         let timing = clamp_input_event_timing(
-            raw_event.time - current_sample_idx as u32,
+            event.header().time() - current_sample_idx as u32,
             total_buffer_len as u32,
         );
 
-        match (raw_event.space_id, raw_event.type_) {
-            (CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_VALUE) => {
-                let event = &*(event as *const clap_event_param_value);
+        // We only support the Core event space for now
+        let Some(event) = event.as_core_event() else { return };
+
+        match event {
+            CoreEventSpace::ParamValue(event) => {
                 self.update_plain_value_by_hash(
-                    event.param_id,
-                    ClapParamUpdate::PlainValueSet(event.value),
+                    event.param_id(),
+                    ClapParamUpdate::PlainValueSet(event.value()),
                     self.current_buffer_config.load().map(|c| c.sample_rate),
                 );
 
@@ -1402,12 +1155,12 @@ impl<P: ClapPlugin> Wrapper<P> {
                 // informed that the parameter has been monophonically automated. This allows the
                 // plugin to update all of its polyphonic modulation values, since polyphonic
                 // modulation acts as an offset to the monophonic value.
-                if let Some(poly_modulation_id) = self.poly_mod_ids_by_hash.get(&event.param_id) {
+                if let Some(poly_modulation_id) = self.poly_mod_ids_by_hash.get(&event.param_id()) {
                     // The modulation offset needs to be normalized to account for modulated
                     // integer or enum parameters
-                    let param_ptr = self.param_by_hash[&event.param_id];
-                    let normalized_value =
-                        event.value as f32 / param_ptr.step_count().unwrap_or(1) as f32;
+                    let param_ptr = self.param_by_hash[&event.param_id()];
+                    let normalized_value = event.value() as f32
+                        / unsafe { param_ptr.step_count() }.unwrap_or(1) as f32;
 
                     input_events.push_back(NoteEvent::MonoAutomation {
                         timing,
@@ -1416,24 +1169,22 @@ impl<P: ClapPlugin> Wrapper<P> {
                     });
                 }
             }
-            (CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_MOD) => {
-                let event = &*(event as *const clap_event_param_mod);
-
-                if event.note_id != -1 && P::MIDI_INPUT >= MidiConfig::Basic {
-                    match self.poly_mod_ids_by_hash.get(&event.param_id) {
+            CoreEventSpace::ParamMod(event) => {
+                if event.note_id() != -1 && P::MIDI_INPUT >= MidiConfig::Basic {
+                    match self.poly_mod_ids_by_hash.get(&event.param_id()) {
                         Some(poly_modulation_id) => {
                             // The modulation offset needs to be normalized to account for modulated
                             // integer or enum parameters
-                            let param_ptr = self.param_by_hash[&event.param_id];
-                            let normalized_offset =
-                                event.amount as f32 / param_ptr.step_count().unwrap_or(1) as f32;
+                            let param_ptr = self.param_by_hash[&event.param_id()];
+                            let normalized_offset = event.amount() as f32
+                                / unsafe { param_ptr.step_count() }.unwrap_or(1) as f32;
 
                             // The host may also add key and channel information here, but it may
                             // also pass -1. So not having that information here at all seems like
                             // the safest choice.
                             input_events.push_back(NoteEvent::PolyModulation {
                                 timing,
-                                voice_id: event.note_id,
+                                voice_id: event.note_id(),
                                 poly_modulation_id: *poly_modulation_id,
                                 normalized_offset,
                             });
@@ -1448,175 +1199,169 @@ impl<P: ClapPlugin> Wrapper<P> {
                 }
 
                 self.update_plain_value_by_hash(
-                    event.param_id,
-                    ClapParamUpdate::PlainValueMod(event.amount),
+                    event.param_id(),
+                    ClapParamUpdate::PlainValueMod(event.amount()),
                     self.current_buffer_config.load().map(|c| c.sample_rate),
                 );
             }
-            (CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_TRANSPORT) => {
-                let event = &*(event as *const clap_event_transport);
+            CoreEventSpace::Transport(event) => {
                 if let Some(transport_info) = transport_info {
                     *transport_info = event;
                 }
             }
-            (CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_ON) => {
+            CoreEventSpace::NoteOn(NoteOnEvent(event)) => {
                 if P::MIDI_INPUT >= MidiConfig::Basic {
-                    let event = &*(event as *const clap_event_note);
                     input_events.push_back(NoteEvent::NoteOn {
                         // When splitting up the buffer for sample accurate automation all events
                         // should be relative to the block
                         timing,
-                        voice_id: if event.note_id != -1 {
-                            Some(event.note_id)
+                        voice_id: if event.note_id() != -1 {
+                            Some(event.note_id())
                         } else {
                             None
                         },
-                        channel: event.channel as u8,
-                        note: event.key as u8,
-                        velocity: event.velocity as f32,
+                        channel: event.channel() as u8,
+                        note: event.key() as u8,
+                        velocity: event.velocity() as f32,
                     });
                 }
             }
-            (CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_OFF) => {
+            CoreEventSpace::NoteOff(NoteOffEvent(event)) => {
                 if P::MIDI_INPUT >= MidiConfig::Basic {
-                    let event = &*(event as *const clap_event_note);
                     input_events.push_back(NoteEvent::NoteOff {
                         timing,
-                        voice_id: if event.note_id != -1 {
-                            Some(event.note_id)
+                        voice_id: if event.note_id() != -1 {
+                            Some(event.note_id())
                         } else {
                             None
                         },
-                        channel: event.channel as u8,
-                        note: event.key as u8,
-                        velocity: event.velocity as f32,
+                        channel: event.channel() as u8,
+                        note: event.key() as u8,
+                        velocity: event.velocity() as f32,
                     });
                 }
             }
-            (CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_CHOKE) => {
+            CoreEventSpace::NoteChoke(NoteChokeEvent(event)) => {
                 if P::MIDI_INPUT >= MidiConfig::Basic {
-                    let event = &*(event as *const clap_event_note);
                     input_events.push_back(NoteEvent::Choke {
                         timing,
-                        voice_id: if event.note_id != -1 {
-                            Some(event.note_id)
+                        voice_id: if event.note_id() != -1 {
+                            Some(event.note_id())
                         } else {
                             None
                         },
                         // FIXME: These values are also allowed to be -1, we need to support that
-                        channel: event.channel as u8,
-                        note: event.key as u8,
+                        channel: event.channel() as u8,
+                        note: event.key() as u8,
                     });
                 }
             }
-            (CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_EXPRESSION) => {
+            CoreEventSpace::NoteExpression(event) => {
                 if P::MIDI_INPUT >= MidiConfig::Basic {
                     // TODO: Add support for the other expression types
-                    let event = &*(event as *const clap_event_note_expression);
-                    match event.expression_id {
-                        CLAP_NOTE_EXPRESSION_PRESSURE => {
+                    match event.expression_type() {
+                        Some(NoteExpressionType::Pressure) => {
                             input_events.push_back(NoteEvent::PolyPressure {
                                 timing,
-                                voice_id: if event.note_id != -1 {
-                                    Some(event.note_id)
+                                voice_id: if event.note_id() != -1 {
+                                    Some(event.note_id())
                                 } else {
                                     None
                                 },
-                                channel: event.channel as u8,
-                                note: event.key as u8,
-                                pressure: event.value as f32,
+                                channel: event.channel() as u8,
+                                note: event.key() as u8,
+                                pressure: event.value() as f32,
                             });
                         }
-                        CLAP_NOTE_EXPRESSION_VOLUME => {
+                        Some(NoteExpressionType::Volume) => {
                             input_events.push_back(NoteEvent::PolyVolume {
                                 timing,
-                                voice_id: if event.note_id != -1 {
-                                    Some(event.note_id)
+                                voice_id: if event.note_id() != -1 {
+                                    Some(event.note_id())
                                 } else {
                                     None
                                 },
-                                channel: event.channel as u8,
-                                note: event.key as u8,
-                                gain: event.value as f32,
+                                channel: event.channel() as u8,
+                                note: event.key() as u8,
+                                gain: event.value() as f32,
                             });
                         }
-                        CLAP_NOTE_EXPRESSION_PAN => {
+                        Some(NoteExpressionType::Pan) => {
                             input_events.push_back(NoteEvent::PolyPan {
                                 timing,
-                                voice_id: if event.note_id != -1 {
-                                    Some(event.note_id)
+                                voice_id: if event.note_id() != -1 {
+                                    Some(event.note_id())
                                 } else {
                                     None
                                 },
-                                channel: event.channel as u8,
-                                note: event.key as u8,
+                                channel: event.channel() as u8,
+                                note: event.key() as u8,
                                 // In CLAP this value goes from [0, 1] instead of [-1, 1]
-                                pan: (event.value as f32 * 2.0) - 1.0,
+                                pan: (event.value() as f32 * 2.0) - 1.0,
                             });
                         }
-                        CLAP_NOTE_EXPRESSION_TUNING => {
+                        Some(NoteExpressionType::Tuning) => {
                             input_events.push_back(NoteEvent::PolyTuning {
                                 timing,
-                                voice_id: if event.note_id != -1 {
-                                    Some(event.note_id)
+                                voice_id: if event.note_id() != -1 {
+                                    Some(event.note_id())
                                 } else {
                                     None
                                 },
-                                channel: event.channel as u8,
-                                note: event.key as u8,
-                                tuning: event.value as f32,
+                                channel: event.channel() as u8,
+                                note: event.key() as u8,
+                                tuning: event.value() as f32,
                             });
                         }
-                        CLAP_NOTE_EXPRESSION_VIBRATO => {
+                        Some(NoteExpressionType::Vibrato) => {
                             input_events.push_back(NoteEvent::PolyVibrato {
                                 timing,
-                                voice_id: if event.note_id != -1 {
-                                    Some(event.note_id)
+                                voice_id: if event.note_id() != -1 {
+                                    Some(event.note_id())
                                 } else {
                                     None
                                 },
-                                channel: event.channel as u8,
-                                note: event.key as u8,
-                                vibrato: event.value as f32,
+                                channel: event.channel() as u8,
+                                note: event.key() as u8,
+                                vibrato: event.value() as f32,
                             });
                         }
-                        CLAP_NOTE_EXPRESSION_EXPRESSION => {
+                        Some(NoteExpressionType::Expression) => {
                             input_events.push_back(NoteEvent::PolyExpression {
                                 timing,
-                                voice_id: if event.note_id != -1 {
-                                    Some(event.note_id)
+                                voice_id: if event.note_id() != -1 {
+                                    Some(event.note_id())
                                 } else {
                                     None
                                 },
-                                channel: event.channel as u8,
-                                note: event.key as u8,
-                                expression: event.value as f32,
+                                channel: event.channel() as u8,
+                                note: event.key() as u8,
+                                expression: event.value() as f32,
                             });
                         }
-                        CLAP_NOTE_EXPRESSION_BRIGHTNESS => {
+                        Some(NoteExpressionType::Brightness) => {
                             input_events.push_back(NoteEvent::PolyBrightness {
                                 timing,
-                                voice_id: if event.note_id != -1 {
-                                    Some(event.note_id)
+                                voice_id: if event.note_id() != -1 {
+                                    Some(event.note_id())
                                 } else {
                                     None
                                 },
-                                channel: event.channel as u8,
-                                note: event.key as u8,
-                                brightness: event.value as f32,
+                                channel: event.channel() as u8,
+                                note: event.key() as u8,
+                                brightness: event.value() as f32,
                             });
                         }
-                        n => nih_debug_assert_failure!("Unhandled note expression ID {}", n),
+                        n => nih_debug_assert_failure!("Unhandled note expression ID {:?}", n),
                     }
                 }
             }
-            (CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI) => {
+            CoreEventSpace::Midi(event) => {
                 // In the Basic note port type, we'll still handle note on, note off, and polyphonic
                 // pressure events if the host sents us those. But we'll throw away any other MIDI
                 // messages to stay consistent with the VST3 wrapper.
-                let event = &*(event as *const clap_event_midi);
 
-                match NoteEvent::from_midi(timing, &event.data) {
+                match NoteEvent::from_midi(timing, &event.data()) {
                     Ok(
                         note_event @ (NoteEvent::NoteOn { .. }
                         | NoteEvent::NoteOff { .. }
@@ -1631,25 +1376,15 @@ impl<P: ClapPlugin> Wrapper<P> {
                     Err(n) => nih_debug_assert_failure!("Unhandled MIDI message type {}", n),
                 };
             }
-            (CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI_SYSEX)
-                if P::MIDI_INPUT >= MidiConfig::Basic =>
-            {
-                let event = &*(event as *const clap_event_midi_sysex);
-
+            CoreEventSpace::MidiSysEx(event) if P::MIDI_INPUT >= MidiConfig::Basic => {
                 // `NoteEvent::from_midi` prints some tracing if parsing fails, which is not
                 // necessarily an error
-                assert!(!event.buffer.is_null());
-                let sysex_buffer = std::slice::from_raw_parts(event.buffer, event.size as usize);
-                if let Ok(note_event) = NoteEvent::from_midi(timing, sysex_buffer) {
+                if let Ok(note_event) = NoteEvent::from_midi(timing, event.data()) {
                     input_events.push_back(note_event);
                 };
             }
-            _ => {
-                nih_trace!(
-                    "Unhandled CLAP event type {} for namespace {}",
-                    raw_event.type_,
-                    raw_event.space_id
-                );
+            event => {
+                nih_trace!("Unhandled CLAP event {:?}", event);
             }
         }
     }
@@ -1746,6 +1481,7 @@ impl<P: ClapPlugin> Wrapper<P> {
             ),
         }
     }
+}
 
     /// Immediately set the plugin state. Returns `false` if the deserialization failed. The plugin
     /// state is set from a couple places, so this function aims to deduplicate that. Includes
@@ -1814,133 +1550,98 @@ impl<P: ClapPlugin> Wrapper<P> {
         success
     }
 
-    unsafe extern "C" fn init(plugin: *const clap_plugin) -> bool {
-        check_null_ptr!(false, plugin, (*plugin).plugin_data);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
+impl<'a, P: ClapPlugin> clack_plugin::plugin::Plugin<'a> for ClapWrapperAudioProcessor<'a, P> {
+    type Shared = ClapWrapperShared<'a, P>;
+    type MainThread = ClapWrapperMainThread<'a, P>;
 
-        // We weren't allowed to query these in the constructor, so we need to do it now instead.
-        *wrapper.host_gui.borrow_mut() =
-            query_host_extension::<clap_host_gui>(&wrapper.host_callback, CLAP_EXT_GUI);
-        *wrapper.host_latency.borrow_mut() =
-            query_host_extension::<clap_host_latency>(&wrapper.host_callback, CLAP_EXT_LATENCY);
-        *wrapper.host_params.borrow_mut() =
-            query_host_extension::<clap_host_params>(&wrapper.host_callback, CLAP_EXT_PARAMS);
-        *wrapper.host_voice_info.borrow_mut() = query_host_extension::<clap_host_voice_info>(
-            &wrapper.host_callback,
-            CLAP_EXT_VOICE_INFO,
-        );
-        *wrapper.host_thread_check.borrow_mut() = query_host_extension::<clap_host_thread_check>(
-            &wrapper.host_callback,
-            CLAP_EXT_THREAD_CHECK,
-        );
-
-        true
-    }
-
-    unsafe extern "C" fn destroy(plugin: *const clap_plugin) {
-        assert!(!plugin.is_null() && !(*plugin).plugin_data.is_null());
-        let this = Arc::from_raw((*plugin).plugin_data as *mut Self);
-        nih_debug_assert_eq!(Arc::strong_count(&this), 1);
-
-        drop(this);
-    }
-
-    unsafe extern "C" fn activate(
-        plugin: *const clap_plugin,
-        sample_rate: f64,
-        min_frames_count: u32,
-        max_frames_count: u32,
-    ) -> bool {
-        check_null_ptr!(false, plugin, (*plugin).plugin_data);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-
-        let audio_io_layout = wrapper.current_audio_io_layout.load();
+    fn activate(
+        host: HostAudioThreadHandle<'a>,
+        _main_thread: &mut Self::MainThread,
+        shared: &'a Self::Shared,
+        audio_config: AudioConfiguration,
+    ) -> Result<Self, PluginError> {
+        let shared = shared.wrapper.clone();
+        let audio_io_layout = shared.current_audio_io_layout.load();
         let buffer_config = BufferConfig {
-            sample_rate: sample_rate as f32,
-            min_buffer_size: Some(min_frames_count),
-            max_buffer_size: max_frames_count,
-            process_mode: wrapper.current_process_mode.load(),
+            sample_rate: audio_config.sample_rate as f32,
+            min_buffer_size: Some(audio_config.min_sample_count),
+            max_buffer_size: audio_config.max_sample_count,
+            process_mode: shared.current_process_mode.load(),
         };
 
         // Before initializing the plugin, make sure all smoothers are set the the default values
-        for param in wrapper.param_by_hash.values() {
-            param.update_smoother(buffer_config.sample_rate, true);
+        for param in shared.param_by_hash.values() {
+            unsafe {
+                param.update_smoother(buffer_config.sample_rate, true);
+            }
         }
 
         // NOTE: This needs to be dropped after the `plugin` lock to avoid deadlocks
-        let mut init_context = wrapper.make_init_context();
-        let mut plugin = wrapper.plugin.lock();
-        if plugin.initialize(&audio_io_layout, &buffer_config, &mut init_context) {
-            // NOTE: `Plugin::reset()` is called in `clap_plugin::start_processing()` instead of in
-            //       this function
+        let mut init_context = shared.make_init_context();
+        let mut plugin = shared.plugin.lock();
+
+        if !plugin.initialize(&audio_io_layout, &buffer_config, &mut init_context) {
+            return Err(PluginError::OperationFailed);
+        }
+
+        // NOTE: `Plugin::reset()` is called in `clap_plugin::start_processing()` instead of in
+        //       this function
 
             // This preallocates enough space so we can transform all of the host's raw channel
             // pointers into a set of `Buffer` objects for the plugin's main and auxiliary IO
             *wrapper.buffer_manager.borrow_mut() =
                 BufferManager::for_audio_io_layout(max_frames_count as usize, audio_io_layout);
 
-            // Also store this for later, so we can reinitialize the plugin after restoring state
-            wrapper.current_buffer_config.store(Some(buffer_config));
+        // Also store this for later, so we can reinitialize the plugin after restoring state
+        shared.current_buffer_config.store(Some(buffer_config));
 
-            true
-        } else {
-            false
-        }
+        Ok(Self { host, shared })
     }
 
-    unsafe extern "C" fn deactivate(plugin: *const clap_plugin) {
-        check_null_ptr!((), plugin, (*plugin).plugin_data);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-
-        wrapper.plugin.lock().deactivate();
+    fn get_descriptor() -> Box<dyn clack_plugin::plugin::descriptor::PluginDescriptor> {
+        todo!()
     }
 
-    unsafe extern "C" fn start_processing(plugin: *const clap_plugin) -> bool {
+    fn deactivate(self, _main_thread: &mut Self::MainThread) {
+        self.shared.plugin.lock().deactivate();
+    }
+
+    fn start_processing(&mut self) -> Result<(), PluginError> {
         // We just need to keep track of our processing state so we can request a flush when
         // updating parameters from the GUI while the processing loop isn't running
-        check_null_ptr!(false, plugin, (*plugin).plugin_data);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
 
         // Always reset the processing status when the plugin gets activated or deactivated
-        wrapper.last_process_status.store(ProcessStatus::Normal);
-        wrapper.is_processing.store(true, Ordering::SeqCst);
+        self.shared.last_process_status.store(ProcessStatus::Normal);
+        self.shared.is_processing.store(true, Ordering::SeqCst);
 
         // To be consistent with the VST3 wrapper, we'll also reset the buffers here in addition to
         // the dedicated `reset()` function.
-        process_wrapper(|| wrapper.plugin.lock().reset());
+        process_wrapper(|| self.shared.plugin.lock().reset());
 
-        true
+        Ok(())
     }
 
-    unsafe extern "C" fn stop_processing(plugin: *const clap_plugin) {
-        check_null_ptr!((), plugin, (*plugin).plugin_data);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-
-        wrapper.is_processing.store(false, Ordering::SeqCst);
+    fn stop_processing(&mut self) {
+        self.shared.is_processing.store(false, Ordering::SeqCst);
     }
 
-    unsafe extern "C" fn reset(plugin: *const clap_plugin) {
-        check_null_ptr!((), plugin, (*plugin).plugin_data);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-
-        process_wrapper(|| wrapper.plugin.lock().reset());
+    fn reset(&mut self, _main_thread: &mut Self::MainThread) {
+        process_wrapper(|| self.shared.plugin.lock().reset());
     }
 
-    unsafe extern "C" fn process(
-        plugin: *const clap_plugin,
-        process: *const clap_process,
-    ) -> clap_process_status {
-        check_null_ptr!(CLAP_PROCESS_ERROR, plugin, (*plugin).plugin_data, process);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-
+    fn process(
+        &mut self,
+        process: &Process,
+        mut audio: Audio,
+        events: Events,
+    ) -> Result<clack_plugin::prelude::ProcessStatus, PluginError> {
         // Panic on allocations if the `assert_process_allocs` feature has been enabled, and make
         // sure that FTZ is set up correctly
         process_wrapper(|| {
             // We need to handle incoming automation and MIDI events. Since we don't support sample
             // accuration automation yet and there's no way to get the last event for a parameter,
             // we'll process every incoming event.
-            let process = &*process;
-            let total_buffer_len = process.frames_count as usize;
+            let total_buffer_len = process.frames_count() as usize;
 
             let current_audio_io_layout = wrapper.current_audio_io_layout.load();
             let has_main_input = current_audio_io_layout.main_input_channels.is_some();
@@ -1956,58 +1657,55 @@ impl<P: ClapPlugin> Wrapper<P> {
 
             // The host may send new transport information as an event. In that case we'll also
             // split the buffer.
-            let mut transport_info = process.transport;
+            let mut transport_info = process.transport();
 
             let result = loop {
-                if !process.in_events.is_null() {
-                    let split_result = wrapper.handle_in_events_until(
-                        &*process.in_events,
-                        &mut transport_info,
-                        block_start,
-                        total_buffer_len,
-                        event_start_idx,
-                        |next_event| {
-                            // Always split the buffer on transport information changes (tempo, time
-                            // signature, or position changes), and also split on parameter value
-                            // changes after the current sample if sample accurate automation is
-                            // enabled
-                            if P::SAMPLE_ACCURATE_AUTOMATION {
-                                match ((*next_event).space_id, (*next_event).type_) {
-                                    (CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_VALUE)
-                                    | (CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_TRANSPORT) => true,
-                                    (CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_MOD) => {
-                                        let next_event =
-                                            &*(next_event as *const clap_event_param_mod);
-
-                                        // The buffer should not be split on polyphonic modulation
-                                        // as those events will be converted to note events
-                                        !(next_event.note_id != -1
-                                            && wrapper
-                                                .poly_mod_ids_by_hash
-                                                .contains_key(&next_event.param_id))
-                                    }
-                                    _ => false,
+                let split_result = self.shared.handle_in_events_until(
+                    events.input,
+                    &mut transport_info,
+                    block_start,
+                    total_buffer_len,
+                    event_start_idx,
+                    |next_event| {
+                        // Always split the buffer on transport information changes (tempo, time
+                        // signature, or position changes), and also split on parameter value
+                        // changes after the current sample if sample accurate automation is
+                        // enabled
+                        if P::SAMPLE_ACCURATE_AUTOMATION {
+                            match next_event.as_core_event() {
+                                Some(
+                                    CoreEventSpace::Transport(_) | CoreEventSpace::ParamValue(_),
+                                ) => true,
+                                Some(CoreEventSpace::ParamMod(next_event)) => {
+                                    // The buffer should not be split on polyphonic modulation
+                                    // as those events will be converted to note events
+                                    !(next_event.note_id() != -1
+                                        && self
+                                            .shared
+                                            .poly_mod_ids_by_hash
+                                            .contains_key(&next_event.param_id()))
                                 }
-                            } else {
-                                matches!(
-                                    ((*next_event).space_id, (*next_event).type_,),
-                                    (CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_TRANSPORT)
-                                )
+                                _ => false,
                             }
-                        },
-                    );
-
-                    // If there are any parameter changes after `block_start` and sample
-                    // accurate automation is enabled or the host sends new transport
-                    // information, then we'll process a new block just after that. Otherwise we can
-                    // process all audio until the end of the buffer.
-                    match split_result {
-                        Some((next_param_change_sample_idx, next_param_change_event_idx)) => {
-                            block_end = next_param_change_sample_idx;
-                            event_start_idx = next_param_change_event_idx;
+                        } else {
+                            matches!(
+                                next_event.as_core_event(),
+                                Some(CoreEventSpace::Transport(_))
+                            )
                         }
-                        None => block_end = total_buffer_len,
+                    },
+                );
+
+                // If there are any parameter changes after `block_start` and sample
+                // accurate automation is enabled or the host sends new transport
+                // information, then we'll process a new block just after that. Otherwise we can
+                // process all audio until the end of the buffer.
+                match split_result {
+                    Some((next_param_change_sample_idx, next_param_change_event_idx)) => {
+                        block_end = next_param_change_sample_idx;
+                        event_start_idx = next_param_change_event_idx;
                     }
+                    None => block_end = total_buffer_len,
                 }
 
                 // After processing the events we now know where/if the block should be split, and
@@ -2124,107 +1822,109 @@ impl<P: ClapPlugin> Wrapper<P> {
                 // Some of the fields are left empty because CLAP does not provide this information,
                 // but the methods on [`Transport`] can reconstruct these values from the other
                 // fields
-                let sample_rate = wrapper
+                let sample_rate = self
+                    .shared
                     .current_buffer_config
                     .load()
                     .expect("Process call without prior initialization call")
                     .sample_rate;
                 let mut transport = Transport::new(sample_rate);
-                if !transport_info.is_null() {
-                    let context = &*transport_info;
+                let context = &*transport_info;
 
-                    transport.playing = context.flags & CLAP_TRANSPORT_IS_PLAYING != 0;
-                    transport.recording = context.flags & CLAP_TRANSPORT_IS_RECORDING != 0;
-                    transport.preroll_active =
-                        Some(context.flags & CLAP_TRANSPORT_IS_WITHIN_PRE_ROLL != 0);
-                    if context.flags & CLAP_TRANSPORT_HAS_TEMPO != 0 {
-                        transport.tempo = Some(context.tempo);
-                    }
-                    if context.flags & CLAP_TRANSPORT_HAS_TIME_SIGNATURE != 0 {
-                        transport.time_sig_numerator = Some(context.tsig_num as i32);
-                        transport.time_sig_denominator = Some(context.tsig_denom as i32);
-                    }
-                    if context.flags & CLAP_TRANSPORT_HAS_BEATS_TIMELINE != 0 {
-                        let beats = context.song_pos_beats as f64 / CLAP_BEATTIME_FACTOR as f64;
+                transport.playing = context.flags.contains(TransportFlags::IS_PLAYING);
+                transport.recording = context.flags.contains(TransportFlags::IS_PLAYING);
+                transport.preroll_active =
+                    Some(context.flags.contains(TransportFlags::IS_WITHIN_PRE_ROLL));
+                if context.flags.contains(TransportFlags::HAS_TEMPO) {
+                    transport.tempo = Some(context.tempo);
+                }
+                if context.flags.contains(TransportFlags::HAS_TIME_SIGNATURE) {
+                    transport.time_sig_numerator = Some(context.time_signature_numerator as i32);
+                    transport.time_sig_denominator =
+                        Some(context.time_signature_denominator as i32);
+                }
+                if context.flags.contains(TransportFlags::HAS_BEATS_TIMELINE) {
+                    let beats = context.song_pos_beats.to_float();
 
-                        // This is a bit messy, but we'll try to compensate for the block splitting.
-                        // We can't use the functions on the transport information object for this
-                        // because we don't have any sample information.
-                        if P::SAMPLE_ACCURATE_AUTOMATION
-                            && block_start > 0
-                            && (context.flags & CLAP_TRANSPORT_HAS_TEMPO != 0)
-                        {
-                            transport.pos_beats = Some(
-                                beats
-                                    + (block_start as f64 / sample_rate as f64 / 60.0
-                                        * context.tempo),
-                            );
-                        } else {
-                            transport.pos_beats = Some(beats);
-                        }
-                    }
-                    if context.flags & CLAP_TRANSPORT_HAS_SECONDS_TIMELINE != 0 {
-                        let seconds = context.song_pos_seconds as f64 / CLAP_SECTIME_FACTOR as f64;
-
-                        // Same here
-                        if P::SAMPLE_ACCURATE_AUTOMATION
-                            && block_start > 0
-                            && (context.flags & CLAP_TRANSPORT_HAS_TEMPO != 0)
-                        {
-                            transport.pos_seconds =
-                                Some(seconds + (block_start as f64 / sample_rate as f64));
-                        } else {
-                            transport.pos_seconds = Some(seconds);
-                        }
-                    }
-                    // TODO: CLAP does not mention whether this is behind a flag or not
-                    if P::SAMPLE_ACCURATE_AUTOMATION && block_start > 0 {
-                        transport.bar_start_pos_beats = match transport.bar_start_pos_beats() {
-                            Some(updated) => Some(updated),
-                            None => Some(context.bar_start as f64 / CLAP_BEATTIME_FACTOR as f64),
-                        };
-                        transport.bar_number = match transport.bar_number() {
-                            Some(updated) => Some(updated),
-                            None => Some(context.bar_number),
-                        };
+                    // This is a bit messy, but we'll try to compensate for the block splitting.
+                    // We can't use the functions on the transport information object for this
+                    // because we don't have any sample information.
+                    if P::SAMPLE_ACCURATE_AUTOMATION
+                        && block_start > 0
+                        && context.flags.contains(TransportFlags::HAS_TEMPO)
+                    {
+                        transport.pos_beats = Some(
+                            beats
+                                + (block_start as f64 / sample_rate as f64 / 60.0 * context.tempo),
+                        );
                     } else {
-                        transport.bar_start_pos_beats =
-                            Some(context.bar_start as f64 / CLAP_BEATTIME_FACTOR as f64);
-                        transport.bar_number = Some(context.bar_number);
+                        transport.pos_beats = Some(beats);
                     }
-                    // TODO: They also aren't very clear about this, but presumably if the loop is
-                    //       active and the corresponding song transport information is available then
-                    //       this is also available
-                    if context.flags & CLAP_TRANSPORT_IS_LOOP_ACTIVE != 0
-                        && context.flags & CLAP_TRANSPORT_HAS_BEATS_TIMELINE != 0
+                }
+                if context.flags.contains(TransportFlags::HAS_SECONDS_TIMELINE) {
+                    let seconds = context.song_pos_seconds.to_float();
+
+                    // Same here
+                    if P::SAMPLE_ACCURATE_AUTOMATION
+                        && block_start > 0
+                        && context.flags.contains(TransportFlags::HAS_TEMPO)
                     {
-                        transport.loop_range_beats = Some((
-                            context.loop_start_beats as f64 / CLAP_BEATTIME_FACTOR as f64,
-                            context.loop_end_beats as f64 / CLAP_BEATTIME_FACTOR as f64,
-                        ));
+                        transport.pos_seconds =
+                            Some(seconds + (block_start as f64 / sample_rate as f64));
+                    } else {
+                        transport.pos_seconds = Some(seconds);
                     }
-                    if context.flags & CLAP_TRANSPORT_IS_LOOP_ACTIVE != 0
-                        && context.flags & CLAP_TRANSPORT_HAS_SECONDS_TIMELINE != 0
-                    {
-                        transport.loop_range_seconds = Some((
-                            context.loop_start_seconds as f64 / CLAP_SECTIME_FACTOR as f64,
-                            context.loop_end_seconds as f64 / CLAP_SECTIME_FACTOR as f64,
-                        ));
-                    }
+                }
+                // TODO: CLAP does not mention whether this is behind a flag or not
+                if P::SAMPLE_ACCURATE_AUTOMATION && block_start > 0 {
+                    transport.bar_start_pos_beats = match transport.bar_start_pos_beats() {
+                        Some(updated) => Some(updated),
+                        None => Some(context.bar_start.to_float()),
+                    };
+                    transport.bar_number = match transport.bar_number() {
+                        Some(updated) => Some(updated),
+                        None => Some(context.bar_number),
+                    };
+                } else {
+                    transport.bar_start_pos_beats = Some(context.bar_start.to_float());
+                    transport.bar_number = Some(context.bar_number);
+                }
+                // TODO: They also aren't very clear about this, but presumably if the loop is
+                //       active and the corresponding song transport information is available then
+                //       this is also available
+                if context
+                    .flags
+                    .contains(TransportFlags::IS_LOOP_ACTIVE & TransportFlags::HAS_BEATS_TIMELINE)
+                {
+                    transport.loop_range_beats = Some((
+                        context.loop_start_beats.to_float(),
+                        context.loop_end_beats.to_float(),
+                    ));
+                }
+                if context
+                    .flags
+                    .contains(TransportFlags::IS_LOOP_ACTIVE & TransportFlags::HAS_SECONDS_TIMELINE)
+                {
+                    transport.loop_range_seconds = Some((
+                        context.loop_start_seconds.to_float(),
+                        context.loop_end_seconds.to_float(),
+                    ));
                 }
 
                 let result = if buffer_is_valid {
-                    let mut plugin = wrapper.plugin.lock();
+                    let mut plugin = self.shared.plugin.lock();
                     // SAFETY: Shortening these borrows is safe as even if the plugin overwrites the
                     //         slices (which it cannot do without using unsafe code), then they
                     //         would still be reset on the next iteration
-                    let mut aux = AuxiliaryBuffers {
-                        inputs: buffers.aux_inputs,
-                        outputs: buffers.aux_outputs,
+                    let mut aux = unsafe {
+                        AuxiliaryBuffers {
+                            inputs: buffers.aux_inputs,
+                            outputs: buffers.aux_outputs,
+                        }
                     };
-                    let mut context = wrapper.make_process_context(transport);
+                    let mut context = self.shared.make_process_context(transport);
                     let result = plugin.process(buffers.main_buffer, &mut aux, &mut context);
-                    wrapper.last_process_status.store(result);
+                    self.shared.last_process_status.store(result);
                     result
                 } else {
                     ProcessStatus::Normal
@@ -2234,18 +1934,19 @@ impl<P: ClapPlugin> Wrapper<P> {
                     ProcessStatus::Error(err) => {
                         nih_debug_assert_failure!("Process error: {}", err);
 
-                        return CLAP_PROCESS_ERROR;
+                        return Err(PluginError::OperationFailed); // TODO: place the error here
                     }
-                    ProcessStatus::Normal => CLAP_PROCESS_CONTINUE_IF_NOT_QUIET,
-                    ProcessStatus::Tail(_) => CLAP_PROCESS_CONTINUE,
-                    ProcessStatus::KeepAlive => CLAP_PROCESS_CONTINUE,
+                    ProcessStatus::Normal => {
+                        clack_plugin::prelude::ProcessStatus::ContinueIfNotQuiet
+                    }
+                    ProcessStatus::Tail(_) => clack_plugin::prelude::ProcessStatus::Continue,
+                    ProcessStatus::KeepAlive => clack_plugin::prelude::ProcessStatus::Continue,
                 };
 
                 // After processing audio, send all spooled events to the host. This include note
                 // events.
-                if !process.out_events.is_null() {
-                    wrapper.handle_out_events(&*process.out_events, block_start, total_buffer_len);
-                }
+                self.shared
+                    .handle_out_events(events.output, block_start, total_buffer_len);
 
                 // If our block ends at the end of the buffer then that means there are no more
                 // unprocessed (parameter) events. If there are more events, we'll just keep going
@@ -2263,13 +1964,13 @@ impl<P: ClapPlugin> Wrapper<P> {
             // plugin state.
             // FIXME: Zero capacity channels allocate on receiving, find a better alternative that
             //        doesn't do that
-            let updated_state = permit_alloc(|| wrapper.updated_state_receiver.try_recv());
+            let updated_state = permit_alloc(|| self.shared.updated_state_receiver.try_recv());
             if let Ok(mut state) = updated_state {
                 wrapper.set_state_inner(&mut state);
 
                 // We'll pass the state object back to the GUI thread so deallocation can happen
                 // there without potentially blocking the audio thread
-                if let Err(err) = wrapper.updated_state_sender.send(state) {
+                if let Err(err) = self.shared.updated_state_sender.send(state) {
                     nih_debug_assert_failure!(
                         "Failed to send state object back to GUI thread: {}",
                         err
@@ -2277,73 +1978,59 @@ impl<P: ClapPlugin> Wrapper<P> {
                 };
             }
 
-            result
+            Ok(result)
         })
     }
 
-    unsafe extern "C" fn get_extension(
-        plugin: *const clap_plugin,
-        id: *const c_char,
-    ) -> *const c_void {
-        check_null_ptr!(std::ptr::null(), plugin, (*plugin).plugin_data, id);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
+    fn declare_extensions(builder: &mut PluginExtensions<Self>, shared: &Self::Shared) {
+        builder
+            .register::<PluginAudioPortsConfig>()
+            .register::<PluginAudioPorts>()
+            .register::<PluginLatency>()
+            .register::<PluginParams>()
+            .register::<PluginRender>()
+            .register::<clack_extensions::state::PluginState>()
+            .register::<PluginTail>();
 
-        let id = CStr::from_ptr(id);
+        if shared.wrapper.editor.borrow().is_some() {
+            builder.register::<PluginGui>();
+        }
 
-        if id == CLAP_EXT_AUDIO_PORTS_CONFIG {
-            &wrapper.clap_plugin_audio_ports_config as *const _ as *const c_void
-        } else if id == CLAP_EXT_AUDIO_PORTS {
-            &wrapper.clap_plugin_audio_ports as *const _ as *const c_void
-        } else if id == CLAP_EXT_GUI && wrapper.editor.borrow().is_some() {
-            // Only report that we support this extension if the plugin has an editor
-            &wrapper.clap_plugin_gui as *const _ as *const c_void
-        } else if id == CLAP_EXT_LATENCY {
-            &wrapper.clap_plugin_latency as *const _ as *const c_void
-        } else if id == CLAP_EXT_NOTE_PORTS
-            && (P::MIDI_INPUT >= MidiConfig::Basic || P::MIDI_OUTPUT >= MidiConfig::Basic)
-        {
-            &wrapper.clap_plugin_note_ports as *const _ as *const c_void
-        } else if id == CLAP_EXT_PARAMS {
-            &wrapper.clap_plugin_params as *const _ as *const c_void
-        } else if id == CLAP_EXT_REMOTE_CONTROLS {
-            &wrapper.clap_plugin_remote_controls as *const _ as *const c_void
-        } else if id == CLAP_EXT_RENDER {
-            &wrapper.clap_plugin_render as *const _ as *const c_void
-        } else if id == CLAP_EXT_STATE {
-            &wrapper.clap_plugin_state as *const _ as *const c_void
-        } else if id == CLAP_EXT_TAIL {
-            &wrapper.clap_plugin_tail as *const _ as *const c_void
-        } else if id == CLAP_EXT_VOICE_INFO && P::CLAP_POLY_MODULATION_CONFIG.is_some() {
-            &wrapper.clap_plugin_voice_info as *const _ as *const c_void
-        } else {
-            nih_trace!("Host tried to query unknown extension {:?}", id);
-            std::ptr::null()
+        if P::MIDI_INPUT >= MidiConfig::Basic || P::MIDI_OUTPUT >= MidiConfig::Basic {
+            builder.register::<PluginNotePorts>();
+        }
+
+        if P::CLAP_POLY_MODULATION_CONFIG.is_some() {
+            builder.register::<PluginVoiceInfo>();
         }
     }
+}
 
-    unsafe extern "C" fn on_main_thread(plugin: *const clap_plugin) {
-        check_null_ptr!((), plugin, (*plugin).plugin_data);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
+impl<'a, P: ClapPlugin> PluginMainThread<'a, ClapWrapperShared<'a, P>>
+    for ClapWrapperMainThread<'a, P>
+{
+    fn new(
+        host: HostMainThreadHandle<'a>,
+        shared: &'a ClapWrapperShared<'a, P>,
+    ) -> Result<Self, PluginError> {
+        Ok(Self {
+            host,
+            shared: shared.wrapper.clone(),
+        })
+    }
 
-        // [Self::schedule_gui] posts a task to the queue and asks the host to call this function
-        // on the main thread, so once that's done we can just handle all requests here
-        while let Some(task) = wrapper.tasks.pop() {
-            wrapper.execute(task, true);
+    fn on_main_thread(&mut self) {
+        while let Some(task) = self.shared.tasks.pop() {
+            self.shared.execute(task, true);
         }
     }
-
-    unsafe extern "C" fn ext_audio_ports_config_count(plugin: *const clap_plugin) -> u32 {
-        check_null_ptr!(0, plugin, (*plugin).plugin_data);
-
-        P::AUDIO_IO_LAYOUTS.len() as u32
+}
+impl<'a, P: ClapPlugin> PluginAudioPortsConfigImpl for ClapWrapperMainThread<'a, P> {
+    fn count(&self) -> u32 {
+            P::AUDIO_IO_LAYOUTS.len() as u32
     }
 
-    unsafe extern "C" fn ext_audio_ports_config_get(
-        plugin: *const clap_plugin,
-        index: u32,
-        config: *mut clap_audio_ports_config,
-    ) -> bool {
-        check_null_ptr!(false, plugin, (*plugin).plugin_data, config);
+    fn get(&self, index: u32, writer: &mut AudioPortConfigWriter) {
 
         // This function directly maps to `P::AUDIO_IO_LAYOUTS`, and we thus also don't need to
         // access the `wrapper` instance
@@ -2396,19 +2083,13 @@ impl<P: ClapPlugin> Wrapper<P> {
         }
     }
 
-    unsafe extern "C" fn ext_audio_ports_config_select(
-        plugin: *const clap_plugin,
-        config_id: clap_id,
-    ) -> bool {
-        check_null_ptr!(false, plugin, (*plugin).plugin_data);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-
+    fn select(&mut self, config_id: u32) -> Result<(), AudioPortConfigSelectError> {
         // We use the vector indices for the config ID
         match P::AUDIO_IO_LAYOUTS.get(config_id as usize) {
             Some(audio_io_layout) => {
                 wrapper.current_audio_io_layout.store(*audio_io_layout);
 
-                true
+                Ok(())
             }
             None => {
                 nih_debug_assert_failure!(
@@ -2416,16 +2097,15 @@ impl<P: ClapPlugin> Wrapper<P> {
                     config_id
                 );
 
-                false
+                Err(AudioPortConfigSelectError)
             }
         }
     }
+}
 
-    unsafe extern "C" fn ext_audio_ports_count(plugin: *const clap_plugin, is_input: bool) -> u32 {
-        check_null_ptr!(0, plugin, (*plugin).plugin_data);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-
-        let audio_io_layout = wrapper.current_audio_io_layout.load();
+impl<'a, P: ClapPlugin> PluginAudioPortsImpl for ClapWrapperMainThread<'a, P> {
+    fn count(&self, is_input: bool) -> u32 {
+        let audio_io_layout = self.shared.current_audio_io_layout.load();
         if is_input {
             let main_ports = if audio_io_layout.main_input_channels.is_some() {
                 1
@@ -2447,17 +2127,9 @@ impl<P: ClapPlugin> Wrapper<P> {
         }
     }
 
-    unsafe extern "C" fn ext_audio_ports_get(
-        plugin: *const clap_plugin,
-        index: u32,
-        is_input: bool,
-        info: *mut clap_audio_port_info,
-    ) -> bool {
-        check_null_ptr!(false, plugin, (*plugin).plugin_data, info);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-
-        let num_input_ports = Self::ext_audio_ports_count(plugin, true);
-        let num_output_ports = Self::ext_audio_ports_count(plugin, false);
+    fn get(&self, is_input: bool, index: u32, writer: &mut AudioPortInfoWriter) {
+        let num_input_ports = <Self as PluginAudioPortsImpl>::count(self, true);
+        let num_output_ports = <Self as PluginAudioPortsImpl>::count(self, false);
         if (is_input && index >= num_input_ports) || (!is_input && index >= num_output_ports) {
             nih_debug_assert_failure!(
                 "Host tried to query information for out of bounds audio port {} (input: {})",
@@ -2465,10 +2137,10 @@ impl<P: ClapPlugin> Wrapper<P> {
                 is_input
             );
 
-            return false;
+            return;
         }
 
-        let current_audio_io_layout = wrapper.current_audio_io_layout.load();
+        let current_audio_io_layout = self.shared.current_audio_io_layout.load();
         let has_main_input = current_audio_io_layout.main_input_channels.is_some();
         let has_main_output = current_audio_io_layout.main_output_channels.is_some();
 
@@ -2486,9 +2158,9 @@ impl<P: ClapPlugin> Wrapper<P> {
         let pair_stable_id = match (is_input, is_main_port) {
             // Ports are named linearly with inputs coming before outputs, so this is the index of
             // the first output port
-            (true, true) if has_main_output => num_input_ports,
-            (false, true) if has_main_input => 0,
-            _ => CLAP_INVALID_ID,
+            (true, true) if has_main_output => Some(num_input_ports),
+            (false, true) if has_main_input => Some(0),
+            _ => None,
         };
 
         let channel_count = match (index, is_input) {
@@ -2510,131 +2182,102 @@ impl<P: ClapPlugin> Wrapper<P> {
         };
 
         let port_type = match channel_count {
-            1 => CLAP_PORT_MONO.as_ptr(),
-            2 => CLAP_PORT_STEREO.as_ptr(),
-            _ => std::ptr::null(),
+            1 => Some(AudioPortType::MONO),
+            2 => Some(AudioPortType::STEREO),
+            _ => None,
         };
 
-        *info = std::mem::zeroed();
-
-        let info = &mut *info;
-        info.id = stable_id;
-        match (is_input, is_main_port) {
-            (true, true) => strlcpy(&mut info.name, &current_audio_io_layout.main_input_name()),
-            (false, true) => strlcpy(&mut info.name, &current_audio_io_layout.main_output_name()),
+        let name = match (is_input, is_main_port) {
+            (true, true) =>  &current_audio_io_layout.main_input_name(),
+            (false, true) => &current_audio_io_layout.main_output_name(),
             (true, false) => {
-                let aux_input_idx = if has_main_input { index - 1 } else { index } as usize;
-                strlcpy(
-                    &mut info.name,
-                    &current_audio_io_layout
-                        .aux_input_name(aux_input_idx)
-                        .expect("Out of bounds auxiliary input port"),
-                );
+                let aux_input_idx = if has_main_input { index - 1 } else { index };
+                &current_audio_io_layout
+                .aux_input_name(aux_input_idx)
+                .expect("Out of bounds auxiliary input port")
             }
             (false, false) => {
-                let aux_output_idx = if has_main_output { index - 1 } else { index } as usize;
-                strlcpy(
-                    &mut info.name,
-                    &current_audio_io_layout
-                        .aux_output_name(aux_output_idx)
-                        .expect("Out of bounds auxiliary output port"),
-                );
+                let aux_output_idx = if has_main_output { index - 1 } else { index };
+                &current_audio_io_layout
+                .aux_output_name(aux_output_idx)
+                .expect("Out of bounds auxiliary output port")
             }
         };
-        info.flags = if is_main_port {
-            CLAP_AUDIO_PORT_IS_MAIN
-        } else {
-            0
-        };
-        info.channel_count = channel_count;
-        info.port_type = port_type;
-        info.in_place_pair = pair_stable_id;
 
-        true
+        writer.set(&AudioPortInfoData {
+            name: name.as_bytes(),
+            id: stable_id,
+            flags: if is_main_port {
+                AudioPortFlags::IS_MAIN
+            } else {
+                AudioPortFlags::empty()
+            },
+            channel_count,
+            port_type,
+            in_place_pair: pair_stable_id,
+        });
     }
+}
 
-    unsafe extern "C" fn ext_gui_is_api_supported(
-        _plugin: *const clap_plugin,
-        api: *const c_char,
-        is_floating: bool,
-    ) -> bool {
+impl<'a, P: ClapPlugin> PluginGuiImpl for ClapWrapperMainThread<'a, P> {
+    fn is_api_supported(&self, api: GuiApiType, is_floating: bool) -> bool {
         // We don't do standalone floating windows
         if is_floating {
             return false;
         }
 
         #[cfg(all(target_family = "unix", not(target_os = "macos")))]
-        if CStr::from_ptr(api) == CLAP_WINDOW_API_X11 {
+        if api == GuiApiType::X11 {
             return true;
         }
         #[cfg(target_os = "macos")]
-        if CStr::from_ptr(api) == CLAP_WINDOW_API_COCOA {
+        if api == GuiApiType::COCOA {
             return true;
         }
         #[cfg(target_os = "windows")]
-        if CStr::from_ptr(api) == CLAP_WINDOW_API_WIN32 {
+        if api == GuiApiType::WIN32 {
             return true;
         }
 
         false
     }
 
-    unsafe extern "C" fn ext_gui_get_preferred_api(
-        _plugin: *const clap_plugin,
-        api: *mut *const c_char,
-        is_floating: *mut bool,
-    ) -> bool {
-        check_null_ptr!(false, api, is_floating);
-
+    fn get_preferred_api(&self) -> Option<(GuiApiType<'static>, bool)> {
         #[cfg(all(target_family = "unix", not(target_os = "macos")))]
         {
-            *api = CLAP_WINDOW_API_X11.as_ptr();
+            Some((GuiApiType::X11, false))
         }
         #[cfg(target_os = "macos")]
         {
-            *api = CLAP_WINDOW_API_COCOA.as_ptr();
+            Some((GuiApiType::COCOA, false))
         }
         #[cfg(target_os = "windows")]
         {
-            *api = CLAP_WINDOW_API_WIN32.as_ptr();
+            Some((GuiApiType::WIN32, false))
         }
-
-        // We don't do standalone floating windows yet
-        *is_floating = false;
-
-        true
     }
 
-    unsafe extern "C" fn ext_gui_create(
-        plugin: *const clap_plugin,
-        api: *const c_char,
-        is_floating: bool,
-    ) -> bool {
+    fn create(&mut self, api: GuiApiType, is_floating: bool) -> Result<(), GuiError> {
         // Double check this in case the host didn't
-        if !Self::ext_gui_is_api_supported(plugin, api, is_floating) {
-            return false;
+        if !self.is_api_supported(api, is_floating) {
+            return Err(GuiError::CreateError);
         }
 
         // In CLAP creating the editor window and embedding it in another window are separate, and
         // those things are one and the same in our framework. So we'll just pretend we did
         // something here.
-        check_null_ptr!(false, plugin, (*plugin).plugin_data);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
 
-        let editor_handle = wrapper.editor_handle.lock();
+        let editor_handle = self.shared.editor_handle.lock();
         if editor_handle.is_none() {
-            true
+            Ok(())
         } else {
             nih_debug_assert_failure!("Tried creating editor while the editor was already active");
-            false
+            Err(GuiError::CreateError)
         }
     }
 
-    unsafe extern "C" fn ext_gui_destroy(plugin: *const clap_plugin) {
-        check_null_ptr!((), plugin, (*plugin).plugin_data);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-
-        let mut editor_handle = wrapper.editor_handle.lock();
+    fn destroy(&mut self) {
+        let mut editor_handle = self.shared.editor_handle.lock();
         if editor_handle.is_some() {
             *editor_handle = None;
         } else {
@@ -2642,17 +2285,15 @@ impl<P: ClapPlugin> Wrapper<P> {
         }
     }
 
-    unsafe extern "C" fn ext_gui_set_scale(plugin: *const clap_plugin, scale: f64) -> bool {
-        check_null_ptr!(false, plugin, (*plugin).plugin_data);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-
+    fn set_scale(&mut self, scale: f64) -> Result<(), GuiError> {
         // On macOS scaling is done by the OS, and all window sizes are in logical pixels
         if cfg!(target_os = "macos") {
             nih_debug_assert_failure!("Ignoring host request to set explicit DPI scaling factor");
-            return false;
+            return Err(GuiError::SetScaleError);
         }
 
-        if wrapper
+        if self
+            .shared
             .editor
             .borrow()
             .as_ref()
@@ -2660,162 +2301,110 @@ impl<P: ClapPlugin> Wrapper<P> {
             .lock()
             .set_scale_factor(scale as f32)
         {
-            wrapper
+            self.shared
                 .editor_scaling_factor
                 .store(scale as f32, std::sync::atomic::Ordering::Relaxed);
-            true
+            Ok(())
         } else {
-            false
+            Err(GuiError::SetScaleError)
         }
     }
 
-    unsafe extern "C" fn ext_gui_get_size(
-        plugin: *const clap_plugin,
-        width: *mut u32,
-        height: *mut u32,
-    ) -> bool {
-        check_null_ptr!(false, plugin, (*plugin).plugin_data, width, height);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-
+    fn get_size(&mut self) -> Option<GuiSize> {
         // For macOS the scaling factor is always 1
         let (unscaled_width, unscaled_height) =
-            wrapper.editor.borrow().as_ref().unwrap().lock().size();
-        let scaling_factor = wrapper.editor_scaling_factor.load(Ordering::Relaxed);
-        (*width, *height) = (
-            (unscaled_width as f32 * scaling_factor).round() as u32,
-            (unscaled_height as f32 * scaling_factor).round() as u32,
-        );
+            self.shared.editor.borrow().as_ref().unwrap().lock().size();
+        let scaling_factor = self.shared.editor_scaling_factor.load(Ordering::Relaxed);
 
-        true
+        Some(GuiSize {
+            width: (unscaled_width as f32 * scaling_factor).round() as u32,
+            height: (unscaled_height as f32 * scaling_factor).round() as u32,
+        })
     }
 
-    unsafe extern "C" fn ext_gui_can_resize(_plugin: *const clap_plugin) -> bool {
+    fn can_resize(&self) -> bool {
         // TODO: Implement Host->Plugin GUI resizing
         false
     }
 
-    unsafe extern "C" fn ext_gui_get_resize_hints(
-        _plugin: *const clap_plugin,
-        _hints: *mut clap_gui_resize_hints,
-    ) -> bool {
+    fn get_resize_hints(&self) -> Option<GuiResizeHints> {
         // TODO: Implement Host->Plugin GUI resizing
-        false
+        None
     }
 
-    unsafe extern "C" fn ext_gui_adjust_size(
-        _plugin: *const clap_plugin,
-        _width: *mut u32,
-        _height: *mut u32,
-    ) -> bool {
+    fn adjust_size(&mut self, _size: GuiSize) -> Option<GuiSize> {
         // TODO: Implement Host->Plugin GUI resizing
-        false
+        None
     }
 
-    unsafe extern "C" fn ext_gui_set_size(
-        plugin: *const clap_plugin,
-        width: u32,
-        height: u32,
-    ) -> bool {
+    fn set_size(&mut self, size: GuiSize) -> Result<(), GuiError> {
         // TODO: Implement Host->Plugin GUI resizing
         // TODO: The host will also call this if an asynchronous (on Linux) resize request fails
-        check_null_ptr!(false, plugin, (*plugin).plugin_data);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-
         let (unscaled_width, unscaled_height) =
-            wrapper.editor.borrow().as_ref().unwrap().lock().size();
-        let scaling_factor = wrapper.editor_scaling_factor.load(Ordering::Relaxed);
+            self.shared.editor.borrow().as_ref().unwrap().lock().size();
+        let scaling_factor = self.shared.editor_scaling_factor.load(Ordering::Relaxed);
         let (editor_width, editor_height) = (
             (unscaled_width as f32 * scaling_factor).round() as u32,
             (unscaled_height as f32 * scaling_factor).round() as u32,
         );
 
-        width == editor_width && height == editor_height
+        if size.width == editor_width && size.height == editor_height {
+            Ok(())
+        } else {
+            Err(GuiError::SetScaleError)
+        }
     }
 
-    unsafe extern "C" fn ext_gui_set_parent(
-        plugin: *const clap_plugin,
-        window: *const clap_window,
-    ) -> bool {
-        check_null_ptr!(false, plugin, (*plugin).plugin_data, window);
-        // For this function we need the underlying Arc so we can pass it to the editor
-        let wrapper = Arc::from_raw((*plugin).plugin_data as *const Self);
+    fn set_parent(&mut self, window: Window) -> Result<(), GuiError> {
+        let mut editor_handle = self.shared.editor_handle.lock();
+        if editor_handle.is_none() {
+            let handle = window.raw_window_handle();
 
-        let window = &*window;
+            // This extension is only exposed when we have an editor
+            *editor_handle = Some(self.shared.editor.borrow().as_ref().unwrap().lock().spawn(
+                ParentWindowHandle { handle },
+                self.shared.clone().make_gui_context(),
+            ));
 
-        let result = {
-            let mut editor_handle = wrapper.editor_handle.lock();
-            if editor_handle.is_none() {
-                let api = CStr::from_ptr(window.api);
-                let handle = if api == CLAP_WINDOW_API_X11 {
-                    let mut handle = raw_window_handle::XcbHandle::empty();
-                    handle.window = window.specific.x11 as u32;
-                    RawWindowHandle::Xcb(handle)
-                } else if api == CLAP_WINDOW_API_COCOA {
-                    let mut handle = raw_window_handle::AppKitHandle::empty();
-                    handle.ns_view = window.specific.cocoa;
-                    RawWindowHandle::AppKit(handle)
-                } else if api == CLAP_WINDOW_API_WIN32 {
-                    let mut handle = raw_window_handle::Win32Handle::empty();
-                    handle.hwnd = window.specific.win32;
-                    RawWindowHandle::Win32(handle)
-                } else {
-                    nih_debug_assert_failure!("Host passed an invalid API");
-                    return false;
-                };
+            Ok(())
+        } else {
+            nih_debug_assert_failure!(
+                "Host tried to attach editor while the editor is already attached"
+            );
 
-                // This extension is only exposed when we have an editor
-                *editor_handle = Some(wrapper.editor.borrow().as_ref().unwrap().lock().spawn(
-                    ParentWindowHandle { handle },
-                    wrapper.clone().make_gui_context(),
-                ));
-
-                true
-            } else {
-                nih_debug_assert_failure!(
-                    "Host tried to attach editor while the editor is already attached"
-                );
-
-                false
-            }
-        };
-
-        // Leak the Arc again since we only needed a clone to pass to the GuiContext
-        let _ = Arc::into_raw(wrapper);
-
-        result
+            Err(GuiError::SetParentError)
+        }
     }
 
-    unsafe extern "C" fn ext_gui_set_transient(
-        _plugin: *const clap_plugin,
-        _window: *const clap_window,
-    ) -> bool {
+    fn set_transient(&mut self, _window: Window) -> Result<(), GuiError> {
         // This is only relevant for floating windows
-        false
+        Err(GuiError::SetTransientError)
     }
 
-    unsafe extern "C" fn ext_gui_suggest_title(_plugin: *const clap_plugin, _title: *const c_char) {
+    fn suggest_title(&mut self, _title: &str) {
         // This is only relevant for floating windows
     }
 
-    unsafe extern "C" fn ext_gui_show(_plugin: *const clap_plugin) -> bool {
+    fn show(&mut self) -> Result<(), GuiError> {
         // TODO: Does this get used? Is this only for the free-standing window extension? (which we
         //       don't implement) This wouldn't make any sense for embedded editors.
-        false
+        Err(GuiError::ShowError)
     }
 
-    unsafe extern "C" fn ext_gui_hide(_plugin: *const clap_plugin) -> bool {
+    fn hide(&mut self) -> Result<(), GuiError> {
         // TODO: Same as the above
-        false
+        Err(GuiError::HideError)
     }
+}
 
-    unsafe extern "C" fn ext_latency_get(plugin: *const clap_plugin) -> u32 {
-        check_null_ptr!(0, plugin, (*plugin).plugin_data);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-
-        wrapper.current_latency.load(Ordering::SeqCst)
+impl<'a, P: ClapPlugin> PluginLatencyImpl for ClapWrapperMainThread<'a, P> {
+    fn get(&mut self) -> u32 {
+        self.shared.current_latency.load(Ordering::SeqCst)
     }
+}
 
-    unsafe extern "C" fn ext_note_ports_count(_plugin: *const clap_plugin, is_input: bool) -> u32 {
+impl<'a, P: ClapPlugin> PluginNotePortsImpl for ClapWrapperMainThread<'a, P> {
+    fn count(&self, is_input: bool) -> u32 {
         match is_input {
             true if P::MIDI_INPUT >= MidiConfig::Basic => 1,
             false if P::MIDI_OUTPUT >= MidiConfig::Basic => 1,
@@ -2823,204 +2412,155 @@ impl<P: ClapPlugin> Wrapper<P> {
         }
     }
 
-    unsafe extern "C" fn ext_note_ports_get(
-        _plugin: *const clap_plugin,
-        index: u32,
-        is_input: bool,
-        info: *mut clap_note_port_info,
-    ) -> bool {
+    fn get(&self, is_input: bool, index: u32, writer: &mut NotePortInfoWriter) {
         match (index, is_input) {
-            (0, true) if P::MIDI_INPUT >= MidiConfig::Basic => {
-                *info = std::mem::zeroed();
-
-                let info = &mut *info;
-                info.id = 0;
+            (0, true) if P::MIDI_INPUT >= MidiConfig::Basic => writer.set(&NotePortInfoData {
+                id: 0,
                 // NOTE: REAPER won't send us SysEx if we don't support the MIDI dialect
                 // TODO: Implement MPE (would just be a toggle for the plugin to expose it) and MIDI2
-                info.supported_dialects = CLAP_NOTE_DIALECT_CLAP | CLAP_NOTE_DIALECT_MIDI;
-                info.preferred_dialect = CLAP_NOTE_DIALECT_CLAP;
-                strlcpy(&mut info.name, "Note Input");
-
-                true
-            }
-            (0, false) if P::MIDI_OUTPUT >= MidiConfig::Basic => {
-                *info = std::mem::zeroed();
-
-                let info = &mut *info;
-                info.id = 0;
+                supported_dialects: NoteDialects::CLAP | NoteDialects::MIDI,
+                preferred_dialect: Some(NoteDialect::Clap),
+                name: b"Note Input",
+            }),
+            (0, false) if P::MIDI_OUTPUT >= MidiConfig::Basic => writer.set(&NotePortInfoData {
+                id: 0,
                 // If `P::MIDI_OUTPUT < MidiConfig::MidiCCs` we'll throw away MIDI CCs, pitch bend
                 // messages, and other messages that are not basic note on, off and polyphonic
                 // pressure messages. This way the behavior is the same as the VST3 wrapper.
-                info.supported_dialects = CLAP_NOTE_DIALECT_CLAP | CLAP_NOTE_DIALECT_MIDI;
-                info.preferred_dialect = CLAP_NOTE_DIALECT_CLAP;
-                strlcpy(&mut info.name, "Note Output");
-
-                true
-            }
-            _ => false,
+                supported_dialects: NoteDialects::CLAP | NoteDialects::MIDI,
+                preferred_dialect: Some(NoteDialect::Clap),
+                name: b"Note Output",
+            }),
+            _ => {}
         }
     }
+}
 
-    unsafe extern "C" fn ext_params_count(plugin: *const clap_plugin) -> u32 {
-        check_null_ptr!(0, plugin, (*plugin).plugin_data);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-
-        wrapper.param_hashes.len() as u32
+impl<'a, P: ClapPlugin> PluginMainThreadParams for ClapWrapperMainThread<'a, P> {
+    fn count(&self) -> u32 {
+        self.shared.param_hashes.len() as u32
     }
 
-    unsafe extern "C" fn ext_params_get_info(
-        plugin: *const clap_plugin,
-        param_index: u32,
-        param_info: *mut clap_param_info,
-    ) -> bool {
-        check_null_ptr!(false, plugin, (*plugin).plugin_data, param_info);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-
-        if param_index > Self::ext_params_count(plugin) {
-            return false;
+    fn get_info(&self, param_index: u32, info: &mut ParamInfoWriter) {
+        if param_index > PluginMainThreadParams::count(self) {
+            return;
         }
 
-        let param_hash = &wrapper.param_hashes[param_index as usize];
-        let param_group = &wrapper.param_group_by_hash[param_hash];
-        let param_ptr = &wrapper.param_by_hash[param_hash];
-        let default_value = param_ptr.default_normalized_value();
-        let step_count = param_ptr.step_count();
-        let flags = param_ptr.flags();
+        let param_hash = self.shared.param_hashes[param_index as usize];
+        let param_group = &self.shared.param_group_by_hash[&param_hash];
+        let param_ptr = self.shared.param_by_hash[&param_hash];
+        let default_value = unsafe { param_ptr.default_normalized_value() };
+        let step_count = unsafe { param_ptr.step_count() };
+        let flags = unsafe { param_ptr.flags() };
         let automatable = !flags.contains(ParamFlags::NON_AUTOMATABLE);
         let hidden = flags.contains(ParamFlags::HIDDEN);
         let is_bypass = flags.contains(ParamFlags::BYPASS);
 
-        *param_info = std::mem::zeroed();
-
         // TODO: We don't use the cookies at this point. In theory this would be faster than the ID
         //       hashmap lookup, but for now we'll stay consistent with the VST3 implementation.
-        let param_info = &mut *param_info;
-        param_info.id = *param_hash;
+
+        let mut param_info = ParamInfoData {
+            id: param_hash,
+            flags: ParamInfoFlags::empty(),
+            cookie: Default::default(),
+            name: unsafe { param_ptr.name() },
+            module: &param_group,
+
+            // We don't use the actual minimum and maximum values here because that would not scale
+            // with skewed integer ranges. Instead, just treat all parameters as `[0, 1]` normalized
+            // parameters multiplied by the step size.
+            min_value: 0.0,
+
+            // Stepped parameters are unnormalized float parameters since there's no separate step
+            // range option
+            // TODO: This should probably be encapsulated in some way so we don't forget about this in one place
+            max_value: step_count.unwrap_or(1) as f64,
+            default_value: default_value as f64 * step_count.unwrap_or(1) as f64,
+        };
+
         // TODO: Somehow expose per note/channel/port modulation
-        param_info.flags = 0;
         if automatable && !hidden {
-            param_info.flags |= CLAP_PARAM_IS_AUTOMATABLE | CLAP_PARAM_IS_MODULATABLE;
-            if wrapper.poly_mod_ids_by_hash.contains_key(param_hash) {
-                param_info.flags |= CLAP_PARAM_IS_MODULATABLE_PER_NOTE_ID;
+            param_info.flags |= ParamInfoFlags::IS_AUTOMATABLE | ParamInfoFlags::IS_MODULATABLE;
+
+            if self.shared.poly_mod_ids_by_hash.contains_key(&param_hash) {
+                param_info.flags |= ParamInfoFlags::IS_MODULATABLE_PER_NOTE_ID;
             }
         }
         if hidden {
-            param_info.flags |= CLAP_PARAM_IS_HIDDEN | CLAP_PARAM_IS_READONLY;
+            param_info.flags |= ParamInfoFlags::IS_HIDDEN | ParamInfoFlags::IS_READONLY;
         }
         if is_bypass {
-            param_info.flags |= CLAP_PARAM_IS_BYPASS
+            param_info.flags |= ParamInfoFlags::IS_BYPASS
         }
         if step_count.is_some() {
-            param_info.flags |= CLAP_PARAM_IS_STEPPED
+            param_info.flags |= ParamInfoFlags::IS_STEPPED
         }
-        param_info.cookie = std::ptr::null_mut();
-        strlcpy(&mut param_info.name, param_ptr.name());
-        strlcpy(&mut param_info.module, param_group);
-        // We don't use the actual minimum and maximum values here because that would not scale
-        // with skewed integer ranges. Instead, just treat all parameters as `[0, 1]` normalized
-        // parameters multiplied by the step size.
-        param_info.min_value = 0.0;
-        // Stepped parameters are unnormalized float parameters since there's no separate step
-        // range option
-        // TODO: This should probably be encapsulated in some way so we don't forget about this in one place
-        param_info.max_value = step_count.unwrap_or(1) as f64;
-        param_info.default_value = default_value as f64 * step_count.unwrap_or(1) as f64;
 
-        true
+        info.set(&param_info);
     }
 
-    unsafe extern "C" fn ext_params_get_value(
-        plugin: *const clap_plugin,
-        param_id: clap_id,
-        value: *mut f64,
-    ) -> bool {
-        check_null_ptr!(false, plugin, (*plugin).plugin_data, value);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-
-        match wrapper.param_by_hash.get(&param_id) {
-            Some(param_ptr) => {
-                *value = param_ptr.modulated_normalized_value() as f64
-                    * param_ptr.step_count().unwrap_or(1) as f64;
-
-                true
-            }
-            _ => false,
-        }
+    fn get_value(&self, param_id: u32) -> Option<f64> {
+        self.shared
+            .param_by_hash
+            .get(&param_id)
+            .map(|param_ptr| unsafe {
+                param_ptr.modulated_normalized_value() as f64
+                    * param_ptr.step_count().unwrap_or(1) as f64
+            })
     }
 
-    unsafe extern "C" fn ext_params_value_to_text(
-        plugin: *const clap_plugin,
-        param_id: clap_id,
+    fn value_to_text(
+        &self,
+        param_id: u32,
         value: f64,
-        display: *mut c_char,
-        size: u32,
-    ) -> bool {
-        check_null_ptr!(false, plugin, (*plugin).plugin_data, display);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
+        writer: &mut ParamDisplayWriter,
+    ) -> std::fmt::Result {
+        use core::fmt::Write;
 
-        let dest = std::slice::from_raw_parts_mut(display, size as usize);
+        let Some(param_ptr) = self.shared.param_by_hash.get(&param_id) else { return Ok(()) };
 
-        match wrapper.param_by_hash.get(&param_id) {
-            Some(param_ptr) => {
-                strlcpy(
-                    dest,
-                    // CLAP does not have a separate unit, so we'll include the unit here
-                    &param_ptr.normalized_value_to_string(
-                        value as f32 / param_ptr.step_count().unwrap_or(1) as f32,
-                        true,
-                    ),
-                );
-
-                true
-            }
-            _ => false,
-        }
-    }
-
-    unsafe extern "C" fn ext_params_text_to_value(
-        plugin: *const clap_plugin,
-        param_id: clap_id,
-        display: *const c_char,
-        value: *mut f64,
-    ) -> bool {
-        check_null_ptr!(false, plugin, (*plugin).plugin_data, display, value);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-
-        let display = match CStr::from_ptr(display).to_str() {
-            Ok(s) => s,
-            Err(_) => return false,
+        // TODO: we should pass the writer straight to normalized_value_to_string instead of allocating a String each time
+        let str = unsafe {
+            param_ptr.normalized_value_to_string(
+                value as f32 / param_ptr.step_count().unwrap_or(1) as f32,
+                true,
+            )
         };
 
-        match wrapper.param_by_hash.get(&param_id) {
-            Some(param_ptr) => {
-                let normalized_value = match param_ptr.string_to_normalized_value(display) {
-                    Some(v) => v as f64,
-                    None => return false,
-                };
-                *value = normalized_value * param_ptr.step_count().unwrap_or(1) as f64;
+        writer.write_str(&str)
+    }
 
-                true
-            }
-            _ => false,
+    fn text_to_value(&self, param_id: u32, text: &str) -> Option<f64> {
+        let param_ptr = self.shared.param_by_hash.get(&param_id)?;
+
+        unsafe {
+            let normalized_value = param_ptr.string_to_normalized_value(text)? as f64;
+            Some(normalized_value * (param_ptr.step_count().unwrap_or(1)) as f64)
         }
     }
 
-    unsafe extern "C" fn ext_params_flush(
-        plugin: *const clap_plugin,
-        in_: *const clap_input_events,
-        out: *const clap_output_events,
+    fn flush(
+        &mut self,
+        input_parameter_changes: &InputEvents,
+        output_parameter_changes: &mut OutputEvents,
     ) {
-        check_null_ptr!((), plugin, (*plugin).plugin_data);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-
-        if !in_.is_null() {
-            wrapper.handle_in_events(&*in_, 0, 0);
-        }
-
-        if !out.is_null() {
-            wrapper.handle_out_events(&*out, 0, 0);
-        }
+        self.shared.handle_in_events(input_parameter_changes, 0, 0);
+        self.shared
+            .handle_out_events(output_parameter_changes, 0, 0);
     }
+}
+
+impl<'a, P: ClapPlugin> PluginParamsImpl for ClapWrapperAudioProcessor<'a, P> {
+    fn flush(
+        &mut self,
+        input_parameter_changes: &InputEvents,
+        output_parameter_changes: &mut OutputEvents,
+    ) {
+        self.shared.handle_in_events(input_parameter_changes, 0, 0);
+        self.shared
+            .handle_out_events(output_parameter_changes, 0, 0);
+    }
+}
 
     unsafe extern "C" fn ext_remote_controls_count(plugin: *const clap_plugin) -> u32 {
         check_null_ptr!(0, plugin, (*plugin).plugin_data);
@@ -3047,99 +2587,56 @@ impl<P: ClapPlugin> Wrapper<P> {
         }
     }
 
-    unsafe extern "C" fn ext_render_has_hard_realtime_requirement(
-        _plugin: *const clap_plugin,
-    ) -> bool {
+impl<'a, P: ClapPlugin> PluginRenderImpl for ClapWrapperMainThread<'a, P> {
+    fn has_hard_realtime_requirement(&self) -> bool {
         P::HARD_REALTIME_ONLY
     }
 
-    unsafe extern "C" fn ext_render_set(
-        plugin: *const clap_plugin,
-        mode: clap_plugin_render_mode,
-    ) -> bool {
-        check_null_ptr!(false, plugin, (*plugin).plugin_data);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
+    fn set(&mut self, mode: RenderMode) -> Result<(), PluginRenderError> {
+        self.shared.current_process_mode.store(match mode {
+            RenderMode::Realtime => ProcessMode::Realtime,
+            RenderMode::Offline => ProcessMode::Offline,
+        });
 
-        let mode = match mode {
-            CLAP_RENDER_REALTIME => ProcessMode::Realtime,
-            // Even if the plugin has a hard realtime requirement, we'll still honor this
-            CLAP_RENDER_OFFLINE => ProcessMode::Offline,
-            n => {
-                nih_debug_assert_failure!("Unknown rendering mode '{}', defaulting to realtime", n);
-                ProcessMode::Realtime
-            }
+        Ok(())
+    }
+}
+
+impl<'a, P: ClapPlugin> PluginStateImpl for ClapWrapperMainThread<'a, P> {
+    fn save(&mut self, output: &mut OutputStream) -> Result<(), PluginError> {
+        use std::io::Write;
+
+        let serialized = unsafe {
+            state::serialize_json::<P>(
+                self.shared.params.clone(),
+                state::make_params_iter(&self.shared.param_by_hash, &self.shared.param_id_to_hash),
+            )
+            .map_err(|e| PluginError::Custom(e.into()))?
         };
-        wrapper.current_process_mode.store(mode);
 
-        true
+        // CLAP does not provide a way to tell how much data there is left in a stream, so
+        // we need to prepend it to our actual state data.
+        let length_bytes = (serialized.len() as u64).to_le_bytes();
+        output.write_all(&length_bytes)?;
+
+        // TODO: pass writer directly to serialize_json instead of allocating an extra Vec
+        output.write_all(&serialized)?;
+
+        nih_trace!("Saved state ({} bytes)", serialized.len());
+
+        Ok(())
     }
 
-    unsafe extern "C" fn ext_state_save(
-        plugin: *const clap_plugin,
-        stream: *const clap_ostream,
-    ) -> bool {
-        check_null_ptr!(false, plugin, (*plugin).plugin_data, stream);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-
-        let serialized = state::serialize_json::<P>(
-            wrapper.params.clone(),
-            state::make_params_iter(&wrapper.param_by_hash, &wrapper.param_id_to_hash),
-        );
-        match serialized {
-            Ok(serialized) => {
-                // CLAP does not provide a way to tell how much data there is left in a stream, so
-                // we need to prepend it to our actual state data.
-                let length_bytes = (serialized.len() as u64).to_le_bytes();
-                if !write_stream(&*stream, &length_bytes) {
-                    nih_debug_assert_failure!(
-                        "Error or end of stream while writing the state length to the stream."
-                    );
-                    return false;
-                }
-                if !write_stream(&*stream, &serialized) {
-                    nih_debug_assert_failure!(
-                        "Error or end of stream while writing the state buffer to the stream."
-                    );
-                    return false;
-                }
-
-                nih_trace!("Saved state ({} bytes)", serialized.len());
-
-                true
-            }
-            Err(err) => {
-                nih_debug_assert_failure!("Could not save state: {:#}", err);
-                false
-            }
-        }
-    }
-
-    unsafe extern "C" fn ext_state_load(
-        plugin: *const clap_plugin,
-        stream: *const clap_istream,
-    ) -> bool {
-        check_null_ptr!(false, plugin, (*plugin).plugin_data, stream);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-
+    fn load(&mut self, input: &mut InputStream) -> Result<(), PluginError> {
         // CLAP does not have a way to tell how much data there is left in a stream, so we've
         // prepended the size in front of our JSON state
         let mut length_bytes = [0u8; 8];
-        if !read_stream(&*stream, length_bytes.as_mut_slice()) {
-            nih_debug_assert_failure!(
-                "Error or end of stream while reading the state length from the stream."
-            );
-            return false;
-        }
+        input.read(&mut length_bytes)?;
+        // TODO: this isn't useful anymore, but removing it is a breaking change
         let length = u64::from_le_bytes(length_bytes);
 
         let mut read_buffer: Vec<u8> = Vec::with_capacity(length as usize);
-        if !read_stream(&*stream, read_buffer.spare_capacity_mut()) {
-            nih_debug_assert_failure!(
-                "Error or end of stream while reading the state buffer from the stream."
-            );
-            return false;
-        }
-        read_buffer.set_len(length as usize);
+        input.read_to_end(&mut read_buffer)?;
 
         match state::deserialize_json(&read_buffer) {
             Some(mut state) => {
@@ -3153,58 +2650,29 @@ impl<P: ClapPlugin> Wrapper<P> {
             None => false,
         }
     }
+}
 
-    unsafe extern "C" fn ext_tail_get(plugin: *const clap_plugin) -> u32 {
-        check_null_ptr!(0, plugin, (*plugin).plugin_data);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-
-        match wrapper.last_process_status.load() {
-            ProcessStatus::Tail(samples) => samples,
-            ProcessStatus::KeepAlive => u32::MAX,
-            _ => 0,
-        }
-    }
-
-    unsafe extern "C" fn ext_voice_info_get(
-        plugin: *const clap_plugin,
-        info: *mut clap_voice_info,
-    ) -> bool {
-        check_null_ptr!(false, plugin, (*plugin).plugin_data, info);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-
-        match P::CLAP_POLY_MODULATION_CONFIG {
-            Some(config) => {
-                *info = clap_voice_info {
-                    voice_count: wrapper.current_voice_capacity.load(Ordering::Relaxed),
-                    voice_capacity: config.max_voice_capacity,
-                    flags: if config.supports_overlapping_voices {
-                        CLAP_VOICE_INFO_SUPPORTS_OVERLAPPING_NOTES
-                    } else {
-                        0
-                    },
-                };
-
-                true
-            }
-            None => false,
+impl<'a, P: ClapPlugin> PluginTailImpl for ClapWrapperAudioProcessor<'a, P> {
+    fn get(&self) -> TailLength {
+        // TODO: remove useless Atomic
+        match self.shared.last_process_status.load() {
+            ProcessStatus::Tail(samples) => TailLength::Finite(samples),
+            ProcessStatus::KeepAlive => TailLength::Infinite,
+            _ => TailLength::Finite(0),
         }
     }
 }
 
-/// Convenience function to query an extension from the host.
-///
-/// # Safety
-///
-/// The extension type `T` must match the extension's name `name`.
-unsafe fn query_host_extension<T>(
-    host_callback: &ClapPtr<clap_host>,
-    name: &CStr,
-) -> Option<ClapPtr<T>> {
-    let extension_ptr =
-        clap_call! { host_callback=>get_extension(&**host_callback, name.as_ptr()) };
-    if !extension_ptr.is_null() {
-        Some(ClapPtr::new(extension_ptr as *const T))
-    } else {
-        None
+impl<'a, P: ClapPlugin> PluginVoiceInfoImpl for ClapWrapperMainThread<'a, P> {
+    fn get(&self) -> Option<VoiceInfo> {
+        P::CLAP_POLY_MODULATION_CONFIG.map(|config| VoiceInfo {
+            voice_count: self.shared.current_voice_capacity.load(Ordering::Relaxed),
+            voice_capacity: config.max_voice_capacity,
+            flags: if config.supports_overlapping_voices {
+                VoiceInfoFlags::SUPPORTS_OVERLAPPING_NOTES
+            } else {
+                VoiceInfoFlags::empty()
+            },
+        })
     }
 }

@@ -130,7 +130,7 @@ pub trait Plugin: Default + Send + 'static {
     //
     // NOTE: Sadly it's not yet possible to default this and the `async_executor()` function to
     //       `()`: https://github.com/rust-lang/rust/issues/29661
-    type BackgroundTask: Send;
+    type BackgroundTask: Send + 'static;
     /// A function that executes the plugin's tasks. When implementing this you will likely want to
     /// pattern match on the task type, and then send any resulting data back over a channel or
     /// triple buffer. See [`BackgroundTask`][Self::BackgroundTask].

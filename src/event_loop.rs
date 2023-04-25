@@ -70,7 +70,7 @@ where
 }
 
 /// Something that can execute tasks of type `T`.
-pub(crate) trait MainThreadExecutor<T>: Send + Sync {
+pub(crate) trait MainThreadExecutor<T>: Send + Sync + 'static {
     /// Execute a task on the current thread. This is either called from the GUI thread or from
     /// another background thread, depending on how the task was scheduled in the [`EventContext`].
     fn execute(&self, task: T, is_gui_thread: bool);

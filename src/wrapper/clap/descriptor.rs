@@ -115,3 +115,45 @@ impl<P: ClapPlugin> PluginDescriptor<P> {
         self.clap_id.as_c_str()
     }
 }
+
+impl<P: ClapPlugin> clack_plugin::plugin::descriptor::PluginDescriptor for PluginDescriptor<P> {
+    fn id(&self) -> &CStr {
+        &self.clap_id
+    }
+
+    fn name(&self) -> &CStr {
+        &self.name
+    }
+
+    fn vendor(&self) -> Option<&CStr> {
+        Some(&self.vendor)
+    }
+
+    fn url(&self) -> Option<&CStr> {
+        Some(&self.url)
+    }
+
+    fn manual_url(&self) -> Option<&CStr> {
+        self.clap_manual_url.as_deref()
+    }
+
+    fn support_url(&self) -> Option<&CStr> {
+        self.clap_support_url.as_deref()
+    }
+
+    fn version(&self) -> Option<&CStr> {
+        self.clap_manual_url.as_deref()
+    }
+
+    fn description(&self) -> Option<&CStr> {
+        self.clap_description.as_deref()
+    }
+
+    fn feature_at(&self, index: usize) -> Option<&CStr> {
+        self.clap_features.get(index).map(|f| f.as_c_str())
+    }
+
+    fn features_count(&self) -> usize {
+        self.clap_features.len()
+    }
+}
