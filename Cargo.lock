@@ -660,6 +660,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "17cc5e6b5ab06331c33589842070416baa137e8b0eb912b008cfd4a78ada7919"
 
 [[package]]
+name = "clack-common"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "clap-sys",
+]
+
+[[package]]
+name = "clack-extensions"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "clack-common",
+ "clack-plugin",
+ "clap-sys",
+ "raw-window-handle 0.4.3",
+]
+
+[[package]]
+name = "clack-plugin"
+version = "0.1.0"
+dependencies = [
+ "clack-common",
+ "clap-sys",
+]
+
+[[package]]
 name = "clang-sys"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2534,6 +2561,8 @@ dependencies = [
  "baseview 0.1.0 (git+https://github.com/RustAudio/baseview.git?rev=7001c2521fa1a439a01967cb881b411cd75d9ee0)",
  "bitflags",
  "cfg-if 1.0.0",
+ "clack-extensions",
+ "clack-plugin",
  "clap",
  "clap-sys",
  "core-foundation",

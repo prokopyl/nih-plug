@@ -3,6 +3,7 @@ mod descriptor;
 pub mod features;
 mod wrapper;
 
+mod draft_ext;
 mod entry;
 
 #[doc(hidden)]

@@ -49,8 +49,8 @@ pub(crate) struct WrapperProcessContext<'a, P: ClapPlugin> {
 /// [`Editor::spawn()`][crate::prelude::Editor::spawn()] so it can interact with the rest of the plugin and
 /// with the host for things like setting parameters.
 // TODO: do not take the whole wrapper here, this causes lifetime issues
-pub(crate) struct WrapperGuiContext<P: ClapPlugin> {
-    pub(super) wrapper: Arc<Wrapper<P>>,
+pub(crate) struct WrapperGuiContext<'a, P: ClapPlugin> {
+    pub(super) wrapper: Arc<Wrapper<'a, P>>,
     #[cfg(debug_assertions)]
     pub(super) param_gesture_checker:
         atomic_refcell::AtomicRefCell<crate::wrapper::util::context_checks::ParamGestureChecker>,

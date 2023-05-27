@@ -15,8 +15,6 @@ use clack_extensions::latency::{HostLatency, PluginLatency, PluginLatencyImpl};
 use clack_extensions::note_ports::{
     NoteDialect, NoteDialects, NotePortInfoData, NotePortInfoWriter, PluginNotePorts,
     PluginNotePortsImpl,
-use clap_sys::ext::draft::remote_controls::{
-    clap_plugin_remote_controls, clap_remote_controls_page, CLAP_EXT_REMOTE_CONTROLS,
 };
 use clack_extensions::params::implementation::{
     ParamDisplayWriter, ParamInfoWriter, PluginMainThreadParams, PluginParamsImpl,
@@ -43,9 +41,9 @@ use clack_plugin::plugin::{AudioConfiguration, PluginError};
 use clack_plugin::prelude::{
     Audio, Events, InputEvents, OutputEvents, PluginMainThread, PluginShared, Process, UnknownEvent,
 };
-use clack_plugin::process::audio::ChannelPair;
 use clack_plugin::stream::{InputStream, OutputStream};
 use clack_plugin::utils::Cookie;
+use clap_sys::ext::draft::remote_controls::clap_remote_controls_page;
 use crossbeam::atomic::AtomicCell;
 use crossbeam::channel::{self, SendTimeoutError};
 use crossbeam::queue::ArrayQueue;
@@ -55,17 +53,14 @@ use std::any::Any;
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Read;
+use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::thread::{self, ThreadId};
 use std::time::Duration;
 
 use super::context::{WrapperGuiContext, WrapperInitContext, WrapperProcessContext};
 use super::descriptor::PluginDescriptor;
-use crate::buffer::Buffer;
-use crate::context::gui::AsyncExecutor;
-use crate::context::process::Transport;
-use crate::editor::{Editor, ParentWindowHandle};
 use crate::event_loop::{BackgroundThread, EventLoop, MainThreadExecutor, TASK_QUEUE_CAPACITY};
 use crate::midi::MidiResult;
 use crate::prelude::{
@@ -74,6 +69,10 @@ use crate::prelude::{
     ProcessMode, ProcessStatus, SysExMessage, TaskExecutor, Transport,
 };
 use crate::util::permit_alloc;
+use crate::wrapper::clap::context::RemoteControlPages;
+use crate::wrapper::clap::draft_ext::remote_controls::{
+    PluginRemoteControls, PluginRemoteControlsImpl, RemoteControlsPageWriter,
+};
 use crate::wrapper::state::{self, PluginState};
 use crate::wrapper::util::buffer_management::{BufferManager, ChannelPointers};
 use crate::wrapper::util::{
@@ -161,8 +160,6 @@ pub struct Wrapper<'a, P: ClapPlugin> {
     // We'll query all of the host's extensions upfront
     host: HostHandle<'a>,
 
-    clap_plugin_audio_ports_config: clap_plugin_audio_ports_config,
-
     /// Needs to be boxed because the plugin object is supposed to contain a static reference to
     /// this.
     _plugin_descriptor: Box<PluginDescriptor<P>>,
@@ -210,11 +207,8 @@ pub struct Wrapper<'a, P: ClapPlugin> {
 
     host_thread_check: Option<&'a HostThreadCheck>,
 
-    clap_plugin_remote_controls: clap_plugin_remote_controls,
     /// The plugin's remote control pages, if it defines any. Filled when initializing the plugin.
     remote_control_pages: Vec<clap_remote_controls_page>,
-
-    clap_plugin_render: clap_plugin_render,
 
     // TODO: support voice info
     host_voice_info: Option<&'a HostVoiceInfo>,
@@ -237,7 +231,7 @@ pub struct Wrapper<'a, P: ClapPlugin> {
     main_thread_id: ThreadId,
     /// A background thread for running tasks independently from the host'main GUI thread. Useful
     /// for longer, blocking tasks. Initialized later as it needs a reference to the wrapper.
-    background_thread: AtomicRefCell<Option<BackgroundThread<Task<P>, Wrapper<'a, P>>>>,
+    background_thread: AtomicRefCell<Option<BackgroundThread<'a, Task<P>, Wrapper<'a, P>>>>,
 }
 
 /// Tasks that can be sent from the plugin to be executed on the main thread in a non-blocking
@@ -544,8 +538,6 @@ impl<'a, P: ClapPlugin> PluginShared<'a> for ClapWrapperShared<'a, P> {
             host,
 
             _plugin_descriptor: plugin_descriptor,
-
-            supported_bus_configs,
 
             host_gui: host.extension(),
 
@@ -1481,7 +1473,6 @@ impl<'a, P: ClapPlugin> Wrapper<'a, P> {
             ),
         }
     }
-}
 
     /// Immediately set the plugin state. Returns `false` if the deserialization failed. The plugin
     /// state is set from a couple places, so this function aims to deduplicate that. Includes
@@ -1549,6 +1540,7 @@ impl<'a, P: ClapPlugin> Wrapper<'a, P> {
 
         success
     }
+}
 
 impl<'a, P: ClapPlugin> clack_plugin::plugin::Plugin<'a> for ClapWrapperAudioProcessor<'a, P> {
     type Shared = ClapWrapperShared<'a, P>;
@@ -1587,10 +1579,12 @@ impl<'a, P: ClapPlugin> clack_plugin::plugin::Plugin<'a> for ClapWrapperAudioPro
         // NOTE: `Plugin::reset()` is called in `clap_plugin::start_processing()` instead of in
         //       this function
 
-            // This preallocates enough space so we can transform all of the host's raw channel
-            // pointers into a set of `Buffer` objects for the plugin's main and auxiliary IO
-            *wrapper.buffer_manager.borrow_mut() =
-                BufferManager::for_audio_io_layout(max_frames_count as usize, audio_io_layout);
+        // This preallocates enough space so we can transform all of the host's raw channel
+        // pointers into a set of `Buffer` objects for the plugin's main and auxiliary IO
+        *shared.buffer_manager.borrow_mut() = BufferManager::for_audio_io_layout(
+            audio_config.max_sample_count as usize,
+            audio_io_layout,
+        );
 
         // Also store this for later, so we can reinitialize the plugin after restoring state
         shared.current_buffer_config.store(Some(buffer_config));
@@ -1643,7 +1637,7 @@ impl<'a, P: ClapPlugin> clack_plugin::plugin::Plugin<'a> for ClapWrapperAudioPro
             // we'll process every incoming event.
             let total_buffer_len = process.frames_count() as usize;
 
-            let current_audio_io_layout = wrapper.current_audio_io_layout.load();
+            let current_audio_io_layout = self.shared.current_audio_io_layout.load();
             let has_main_input = current_audio_io_layout.main_input_channels.is_some();
             let has_main_output = current_audio_io_layout.main_output_channels.is_some();
             let aux_input_start_idx = if has_main_input { 1 } else { 0 };
@@ -1717,86 +1711,77 @@ impl<'a, P: ClapPlugin> clack_plugin::plugin::Plugin<'a> for ClapWrapperAudioPro
                 // TODO: The audio buffers have a latency field, should we use those?
                 // TODO: Like with VST3, should we expose some way to access or set the silence/constant
                 //       flags?
-                let mut buffer_manager = wrapper.buffer_manager.borrow_mut();
-                let buffers =
+                let mut buffer_manager = self.shared.buffer_manager.borrow_mut();
+                let buffers = unsafe {
                     buffer_manager.create_buffers(block_start, block_len, |buffer_source| {
                         // Explicitly take plugins with no main output that does have auxiliary
                         // outputs into account. Shouldn't happen, but if we just start copying
                         // audio here then that would result in unsoundness.
-                        if process.audio_outputs_count > 0
-                            && !process.audio_outputs.is_null()
-                            && !(*process.audio_outputs).data32.is_null()
-                            && has_main_output
-                        {
-                            let audio_output = &*process.audio_outputs;
-                            let ptrs = NonNull::new(audio_output.data32 as *mut *mut f32).unwrap();
-                            let num_channels = audio_output.channel_count as usize;
-
-                            *buffer_source.main_output_channel_pointers =
-                                Some(ChannelPointers { ptrs, num_channels });
-                        }
-
-                        if process.audio_inputs_count > 0
-                            && !process.audio_inputs.is_null()
-                            && !(*process.audio_inputs).data32.is_null()
-                            && has_main_input
-                        {
-                            let audio_input = &*process.audio_inputs;
-                            let ptrs = NonNull::new(audio_input.data32 as *mut *mut f32).unwrap();
-                            let num_channels = audio_input.channel_count as usize;
-
-                            *buffer_source.main_input_channel_pointers =
-                                Some(ChannelPointers { ptrs, num_channels });
-                        }
-
-                        if !process.audio_inputs.is_null() {
-                            for (aux_input_no, aux_input_channel_pointers) in buffer_source
-                                .aux_input_channel_pointers
-                                .iter_mut()
-                                .enumerate()
+                        if has_main_output {
+                            if let Some(output) = audio
+                                .output_port(0)
+                                .and_then(|mut p| p.channels()?.into_f32())
                             {
-                                let aux_input_idx = aux_input_no + aux_input_start_idx;
-                                if aux_input_idx > process.audio_inputs_count as usize {
-                                    break;
-                                }
+                                let data = output.raw_data();
+                                let ptrs = NonNull::new(data.as_ptr() as *mut *mut f32).unwrap();
+                                let num_channels = data.len();
 
-                                let audio_input = &*process.audio_inputs.add(aux_input_idx);
-                                match NonNull::new(audio_input.data32 as *mut *mut f32) {
-                                    Some(ptrs) => {
-                                        let num_channels = audio_input.channel_count as usize;
-
-                                        *aux_input_channel_pointers =
-                                            Some(ChannelPointers { ptrs, num_channels });
-                                    }
-                                    None => continue,
-                                }
+                                *buffer_source.main_output_channel_pointers =
+                                    Some(ChannelPointers { ptrs, num_channels });
                             }
                         }
 
-                        if !process.audio_outputs.is_null() {
-                            for (aux_output_no, aux_output_channel_pointers) in buffer_source
-                                .aux_output_channel_pointers
-                                .iter_mut()
-                                .enumerate()
+                        if has_main_input {
+                            if let Some(input) = audio
+                                .input_port(0)
+                                .and_then(|mut p| p.channels()?.into_f32())
                             {
-                                let aux_output_idx = aux_output_no + aux_output_start_idx;
-                                if aux_output_idx > process.audio_outputs_count as usize {
-                                    break;
-                                }
+                                let data = input.raw_data();
+                                let ptrs = NonNull::new(data.as_ptr() as *mut *mut f32).unwrap();
+                                let num_channels = data.len();
 
-                                let audio_output = &*process.audio_outputs.add(aux_output_idx);
-                                match NonNull::new(audio_output.data32 as *mut *mut f32) {
-                                    Some(ptrs) => {
-                                        let num_channels = audio_output.channel_count as usize;
-
-                                        *aux_output_channel_pointers =
-                                            Some(ChannelPointers { ptrs, num_channels });
-                                    }
-                                    None => continue,
-                                }
+                                *buffer_source.main_input_channel_pointers =
+                                    Some(ChannelPointers { ptrs, num_channels });
                             }
                         }
-                    });
+
+                        for (aux_input_channel_pointers, audio_input) in buffer_source
+                            .aux_input_channel_pointers
+                            .iter_mut()
+                            .zip(audio.input_ports().skip(aux_input_start_idx))
+                        {
+                            if let Some(audio_input) =
+                                audio_input.channels().and_then(|c| c.into_f32())
+                            {
+                                let num_channels = audio_input.channel_count() as usize;
+                                let ptrs =
+                                    NonNull::new(audio_input.raw_data().as_ptr() as *mut *mut f32)
+                                        .unwrap();
+
+                                *aux_input_channel_pointers =
+                                    Some(ChannelPointers { ptrs, num_channels });
+                            }
+                        }
+
+                        for (aux_output_channel_pointers, mut audio_output) in buffer_source
+                            .aux_output_channel_pointers
+                            .iter_mut()
+                            .zip(audio.output_ports().skip(aux_output_start_idx))
+                        {
+                            if let Some(audio_output) =
+                                audio_output.channels().and_then(|c| c.into_f32())
+                            {
+                                let num_channels = audio_output.channel_count() as usize;
+                                let ptrs =
+                                    NonNull::new(audio_output.raw_data().as_ptr() as *mut *mut f32)
+                                        .unwrap();
+
+                                *aux_output_channel_pointers =
+                                    Some(ChannelPointers { ptrs, num_channels });
+                            }
+                        }
+                    })
+                };
 
                 // If the host does not provide outputs or if it does not provide the required
                 // number of channels (should not happen, but Ableton Live does this for bypassed
@@ -1966,7 +1951,7 @@ impl<'a, P: ClapPlugin> clack_plugin::plugin::Plugin<'a> for ClapWrapperAudioPro
             //        doesn't do that
             let updated_state = permit_alloc(|| self.shared.updated_state_receiver.try_recv());
             if let Ok(mut state) = updated_state {
-                wrapper.set_state_inner(&mut state);
+                self.shared.set_state_inner(&mut state);
 
                 // We'll pass the state object back to the GUI thread so deallocation can happen
                 // there without potentially blocking the audio thread
@@ -1990,7 +1975,8 @@ impl<'a, P: ClapPlugin> clack_plugin::plugin::Plugin<'a> for ClapWrapperAudioPro
             .register::<PluginParams>()
             .register::<PluginRender>()
             .register::<clack_extensions::state::PluginState>()
-            .register::<PluginTail>();
+            .register::<PluginTail>()
+            .register::<PluginRemoteControls>();
 
         if shared.wrapper.editor.borrow().is_some() {
             builder.register::<PluginGui>();
@@ -2027,58 +2013,42 @@ impl<'a, P: ClapPlugin> PluginMainThread<'a, ClapWrapperShared<'a, P>>
 }
 impl<'a, P: ClapPlugin> PluginAudioPortsConfigImpl for ClapWrapperMainThread<'a, P> {
     fn count(&self) -> u32 {
-            P::AUDIO_IO_LAYOUTS.len() as u32
+        P::AUDIO_IO_LAYOUTS.len() as u32
     }
 
     fn get(&self, index: u32, writer: &mut AudioPortConfigWriter) {
-
         // This function directly maps to `P::AUDIO_IO_LAYOUTS`, and we thus also don't need to
         // access the `wrapper` instance
         match P::AUDIO_IO_LAYOUTS.get(index as usize) {
             Some(audio_io_layout) => {
-                let name = audio_io_layout.name();
-
-                let main_input_channels = audio_io_layout.main_input_channels.map(NonZeroU32::get);
-                let main_output_channels =
-                    audio_io_layout.main_output_channels.map(NonZeroU32::get);
-                let input_port_type = match main_input_channels {
-                    Some(1) => CLAP_PORT_MONO.as_ptr(),
-                    Some(2) => CLAP_PORT_STEREO.as_ptr(),
-                    _ => std::ptr::null(),
-                };
-                let output_port_type = match main_output_channels {
-                    Some(1) => CLAP_PORT_MONO.as_ptr(),
-                    Some(2) => CLAP_PORT_STEREO.as_ptr(),
-                    _ => std::ptr::null(),
-                };
-
-                *config = std::mem::zeroed();
-
-                let config = &mut *config;
-                config.id = index;
-                strlcpy(&mut config.name, &name);
-                config.input_port_count = (if main_input_channels.is_some() { 1 } else { 0 }
-                    + audio_io_layout.aux_input_ports.len())
-                    as u32;
-                config.output_port_count = (if main_output_channels.is_some() { 1 } else { 0 }
-                    + audio_io_layout.aux_output_ports.len())
-                    as u32;
-                config.has_main_input = main_input_channels.is_some();
-                config.main_input_channel_count = main_input_channels.unwrap_or_default();
-                config.main_input_port_type = input_port_type;
-                config.has_main_output = main_output_channels.is_some();
-                config.main_output_channel_count = main_output_channels.unwrap_or_default();
-                config.main_output_port_type = output_port_type;
-
-                true
+                writer.write(&AudioPortsConfiguration {
+                    id: index,
+                    name: audio_io_layout.name().as_bytes(),
+                    input_port_count: if audio_io_layout.main_input_channels.is_some() {
+                        1
+                    } else {
+                        0
+                    } + audio_io_layout.aux_input_ports.len() as u32,
+                    output_port_count: if audio_io_layout.main_output_channels.is_some() {
+                        1
+                    } else {
+                        0
+                    } + audio_io_layout.aux_output_ports.len() as u32,
+                    main_input: audio_io_layout.main_input_channels.map(|c| MainPortInfo {
+                        channel_count: c.get(),
+                        port_type: AudioPortType::from_channel_count(c.get()),
+                    }),
+                    main_output: audio_io_layout.main_output_channels.map(|c| MainPortInfo {
+                        channel_count: c.get(),
+                        port_type: AudioPortType::from_channel_count(c.get()),
+                    }),
+                });
             }
             None => {
                 nih_debug_assert_failure!(
                     "Host tried to query out of bounds audio port config {}",
                     index
                 );
-
-                false
             }
         }
     }
@@ -2087,7 +2057,7 @@ impl<'a, P: ClapPlugin> PluginAudioPortsConfigImpl for ClapWrapperMainThread<'a,
         // We use the vector indices for the config ID
         match P::AUDIO_IO_LAYOUTS.get(config_id as usize) {
             Some(audio_io_layout) => {
-                wrapper.current_audio_io_layout.store(*audio_io_layout);
+                self.shared.current_audio_io_layout.store(*audio_io_layout);
 
                 Ok(())
             }
@@ -2188,19 +2158,19 @@ impl<'a, P: ClapPlugin> PluginAudioPortsImpl for ClapWrapperMainThread<'a, P> {
         };
 
         let name = match (is_input, is_main_port) {
-            (true, true) =>  &current_audio_io_layout.main_input_name(),
+            (true, true) => &current_audio_io_layout.main_input_name(),
             (false, true) => &current_audio_io_layout.main_output_name(),
             (true, false) => {
                 let aux_input_idx = if has_main_input { index - 1 } else { index };
                 &current_audio_io_layout
-                .aux_input_name(aux_input_idx)
-                .expect("Out of bounds auxiliary input port")
+                    .aux_input_name(aux_input_idx as usize)
+                    .expect("Out of bounds auxiliary input port")
             }
             (false, false) => {
                 let aux_output_idx = if has_main_output { index - 1 } else { index };
                 &current_audio_io_layout
-                .aux_output_name(aux_output_idx)
-                .expect("Out of bounds auxiliary output port")
+                    .aux_output_name(aux_output_idx as usize)
+                    .expect("Out of bounds auxiliary output port")
             }
         };
 
@@ -2562,30 +2532,19 @@ impl<'a, P: ClapPlugin> PluginParamsImpl for ClapWrapperAudioProcessor<'a, P> {
     }
 }
 
-    unsafe extern "C" fn ext_remote_controls_count(plugin: *const clap_plugin) -> u32 {
-        check_null_ptr!(0, plugin, (*plugin).plugin_data);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
-
-        wrapper.remote_control_pages.len() as u32
+impl<'a, P: ClapPlugin> PluginRemoteControlsImpl for ClapWrapperMainThread<'a, P> {
+    fn count(&self) -> u32 {
+        self.shared.remote_control_pages.len() as u32
     }
 
-    unsafe extern "C" fn ext_remote_controls_get(
-        plugin: *const clap_plugin,
-        page_index: u32,
-        page: *mut clap_remote_controls_page,
-    ) -> bool {
-        check_null_ptr!(false, plugin, (*plugin).plugin_data, page);
-        let wrapper = &*((*plugin).plugin_data as *const Self);
+    fn get(&self, index: u32, writer: &mut RemoteControlsPageWriter) {
+        nih_debug_assert!(index as usize <= self.shared.remote_control_pages.len());
 
-        nih_debug_assert!(page_index as usize <= wrapper.remote_control_pages.len());
-        match wrapper.remote_control_pages.get(page_index as usize) {
-            Some(p) => {
-                *page = *p;
-                true
-            }
-            None => false,
+        if let Some(remote_control_page) = self.shared.remote_control_pages.get(index as usize) {
+            writer.write_raw(*remote_control_page)
         }
     }
+}
 
 impl<'a, P: ClapPlugin> PluginRenderImpl for ClapWrapperMainThread<'a, P> {
     fn has_hard_realtime_requirement(&self) -> bool {
@@ -2638,16 +2597,17 @@ impl<'a, P: ClapPlugin> PluginStateImpl for ClapWrapperMainThread<'a, P> {
         let mut read_buffer: Vec<u8> = Vec::with_capacity(length as usize);
         input.read_to_end(&mut read_buffer)?;
 
-        match state::deserialize_json(&read_buffer) {
+        match unsafe { state::deserialize_json(&read_buffer) } {
             Some(mut state) => {
-                let success = wrapper.set_state_inner(&mut state);
+                let success = self.shared.set_state_inner(&mut state);
                 if success {
                     nih_trace!("Loaded state ({} bytes)", read_buffer.len());
+                    Ok(())
+                } else {
+                    Err(PluginError::OperationFailed)
                 }
-
-                success
             }
-            None => false,
+            None => Err(PluginError::OperationFailed),
         }
     }
 }
