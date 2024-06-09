@@ -111,7 +111,7 @@ impl Default for GainParams {
 }
 
 impl Plugin for Gain {
-    const NAME: &'static str = "Gain";
+    const NAME: &'static str = "Gain (Clack hotReload)";
     const VENDOR: &'static str = "Moist Plugins GmbH";
     // You can use `env!("CARGO_PKG_HOMEPAGE")` to reference the homepage field from the
     // `Cargo.toml` file here
@@ -192,7 +192,7 @@ impl Plugin for Gain {
 }
 
 impl ClapPlugin for Gain {
-    const CLAP_ID: &'static str = "com.moist-plugins-gmbh.gain";
+    const CLAP_ID: &'static str = "com.moist-plugins-gmbh.gain-hotreload";
     const CLAP_DESCRIPTION: Option<&'static str> = Some("A smoothed gain parameter example plugin");
     const CLAP_MANUAL_URL: Option<&'static str> = Some(Self::URL);
     const CLAP_SUPPORT_URL: Option<&'static str> = None;

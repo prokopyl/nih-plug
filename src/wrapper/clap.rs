@@ -15,6 +15,7 @@ pub use clap_sys::host::clap_host;
 pub use clap_sys::plugin::{clap_plugin, clap_plugin_descriptor};
 pub use clap_sys::version::CLAP_VERSION;
 pub use lazy_static::lazy_static;
+pub use clap_hot_reload::export_reloadable_clap_entry;
 
 /// Export one or more CLAP plugins from this library using the provided plugin types.
 #[macro_export]
@@ -131,14 +132,12 @@ macro_rules! nih_export_clap {
         }
 
         /// The CLAP plugin's entry point.
-        #[no_mangle]
-        #[used]
-        pub static clap_entry: $crate::wrapper::clap::clap_plugin_entry =
-            $crate::wrapper::clap::clap_plugin_entry {
+        $crate::wrapper::clap::export_reloadable_clap_entry!($crate::wrapper::clap::clap_plugin_entry {
                 clap_version: $crate::wrapper::clap::CLAP_VERSION,
                 init: Some(self::clap::init),
                 deinit: Some(self::clap::deinit),
                 get_factory: Some(self::clap::get_factory),
-            };
+            });
+
     };
 }
